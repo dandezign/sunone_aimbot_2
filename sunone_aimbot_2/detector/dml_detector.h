@@ -5,7 +5,14 @@
 #include <opencv2/opencv.hpp>
 #include <mutex>
 
-#include "postProcess.h"
+// postProcess.h removed - YOLO26 doesn't use NMS
+// Detection struct moved here
+struct Detection
+{
+    cv::Rect box;
+    float confidence;
+    int classId;
+};
 
 class DirectMLDetector
 {
@@ -25,7 +32,7 @@ public:
     std::chrono::duration<double, std::milli> lastPreprocessTimeDML;
     std::chrono::duration<double, std::milli> lastCopyTimeDML;
     std::chrono::duration<double, std::milli> lastPostprocessTimeDML;
-    std::chrono::duration<double, std::milli> lastNmsTimeDML;
+    // lastNmsTimeDML removed - YOLO26 doesn't use NMS
 
     std::condition_variable inferenceCV;
     std::atomic<bool> shouldExit = false;

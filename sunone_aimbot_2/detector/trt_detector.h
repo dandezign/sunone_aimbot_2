@@ -19,7 +19,14 @@
 #include <opencv2/cudaarithm.hpp>
 #include <cuda_runtime_api.h>
 
-#include "postProcess.h"
+// postProcess.h removed - YOLO26 doesn't use NMS
+// Detection struct moved here
+struct Detection
+{
+    cv::Rect box;
+    float confidence;
+    int classId;
+};
 
 class TrtDetector
 {
@@ -41,7 +48,7 @@ public:
     std::chrono::duration<double, std::milli> lastInferenceTime;
     std::chrono::duration<double, std::milli> lastCopyTime;
     std::chrono::duration<double, std::milli> lastPostprocessTime;
-    std::chrono::duration<double, std::milli> lastNmsTime;
+    // lastNmsTime removed - YOLO26 doesn't use NMS
 
 private:
     std::unique_ptr<nvinfer1::IRuntime> runtime;
@@ -89,10 +96,9 @@ private:
 
     cv::cuda::Stream cvStream;
 
-    void postProcess(
+    void decodeOutputs(
         const float* output,
-        const std::string& outputName,
-        std::chrono::duration<double, std::milli>* nmsTime
+        const std::string& outputName
     );
 
     void getInputNames();
