@@ -140,37 +140,79 @@ std::vector<Detection> decodeYolo26Outputs(
     const float* output,
     const std::vector<int64_t>& shape,
     int numClasses,
-    float confThreshold
-    // Note: NO nmsThreshold parameter
+    float confThreshold,
+    int imageWidth,   // For bounds validation
+    int imageHeight   // For bounds validation
 );
 ```
 
-### Decoder Logic
+### Decoder Logic with Validation
 
 ```cpp
 std::vector<Detection> decodeYolo26Outputs(...) {
     std::vector<Detection> detections;
+    
+    // Validate input pointer
+    if (!output) {
+        return detections;  // Return empty vector on null input
+    }
+    
+    // Validate output shape: expect (N, 300, 6) or flat (1800,)
+    const int64_t expectedSize = 300 * 6;
+    const int64_t actualSize = shape.empty() ? 1800 : 
+                               (shape.size() == 1 ? shape[0] : 
+                                shape[1] * shape[2]);
+    
+    if (actualSize != expectedSize) {
+        // Log warning: unexpected output shape
+        return detections;  // Return empty on shape mismatch
+    }
     
     // YOLO26 output: (N, 300, 6)
     // Format: [x, y, w, h, conf, class_id]
     
     for (int i = 0; i < 300; i++) {
         float conf = output[i * 6 + 4];
-        if (conf < confThreshold) continue;
+        
+        // Skip low-confidence detections
+        if (conf < confThreshold || std::isnan(conf) || std::isinf(conf)) {
+            continue;
+        }
         
         float x = output[i * 6 + 0];
         float y = output[i * 6 + 1];
         float w = output[i * 6 + 2];
         float h = output[i * 6 + 3];
-        int classId = static_cast<int>(output[i * 6 + 5]);
+        float classIdFloat = output[i * 6 + 5];
+        
+        // Validate coordinates (reject NaN/inf/negative)
+        if (std::isnan(x) || std::isnan(y) || std::isnan(w) || std::isnan(h) ||
+            std::isinf(x) || std::isinf(y) || std::isinf(w) || std::isinf(h) ||
+            x < 0 || y < 0 || w <= 0 || h <= 0) {
+            continue;
+        }
+        
+        // Validate classId bounds
+        int classId = static_cast<int>(classIdFloat);
+        if (classId < 0 || classId >= numClasses) {
+            continue;  // Skip invalid class IDs
+        }
+        
+        // Clamp to image bounds
+        int clampedX = std::max(0, std::min(static_cast<int>(x), imageWidth - 1));
+        int clampedY = std::max(0, std::min(static_cast<int>(y), imageHeight - 1));
+        int clampedW = std::min(static_cast<int>(w), imageWidth - clampedX);
+        int clampedH = std::min(static_cast<int>(h), imageHeight - clampedY);
         
         detections.push_back({
-            cv::Rect(x, y, w, h),
+            cv::Rect(clampedX, clampedY, clampedW, clampedH),
             conf,
             classId
         });
     }
     
+    // Return all detections up to 300 (YOLO26 native limit)
+    // Note: max_detections config can cap this in caller if desired
     return detections;
 }
 ```
@@ -254,13 +296,26 @@ yolo export model=yolo26m.pt format=onnx dynamic=true simplify=true
 
 | Test | Expected Result |
 |------|-----------------|
-| Load YOLO26n ONNX | Success |
-| Load YOLO26s ONNX | Success |
-| Load YOLO26m ONNX | Success |
-| Inference on test image | Detections returned |
+| Load YOLO26n ONNX | Success, shape verified `(N, 300, 6)` |
+| Load YOLO26s ONNX | Success, shape verified `(N, 300, 6)` |
+| Load YOLO26m ONNX | Success, shape verified `(N, 300, 6)` |
+| Inference on test image | ≥5 COCO objects detected with conf >0.25 |
+| Null output handling | Returns empty vector (no crash) |
+| Shape mismatch handling | Returns empty vector, logs warning |
+| Invalid coordinates | Skipped silently (no crash) |
+| Invalid classId | Skipped silently (no crash) |
 | No NMS in pipeline | Confirmed via code review |
-| Latency measurement | 5-8ms improvement |
+| Latency measurement | 5-8ms improvement vs baseline |
 | Config without nms_threshold | Loads without error |
+| Old config with nms_threshold | Field ignored (graceful degradation) |
+
+### Config Migration Behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| **New config (no nms_threshold)** | Loads normally |
+| **Old config (has nms_threshold)** | Field silently ignored, no error |
+| **Rationale** | Graceful degradation avoids breaking existing users |
 
 ### Benchmark Comparison
 
@@ -302,11 +357,15 @@ Users upgrading from previous versions need to:
 
 - [ ] `postProcess.cpp/h` deleted
 - [ ] All detector files compile without errors
-- [ ] YOLO26n/s/m models load successfully
-- [ ] Inference returns valid detections
+- [ ] YOLO26n/s/m models load successfully with verified shape `(N, 300, 6)`
+- [ ] Inference detects ≥5 COCO objects in standard test image (conf >0.25)
+- [ ] Null output returns empty vector (no segfault)
+- [ ] Shape mismatch returns empty vector (no crash)
+- [ ] Invalid coordinates/classId silently skipped (no crash)
 - [ ] No NMS-related code in codebase
 - [ ] Config struct has no `nms_threshold`
-- [ ] Latency improved by 5-8ms (benchmark verified)
+- [ ] Old configs with `nms_threshold` load without error (field ignored)
+- [ ] Latency improved by 5-8ms (benchmark verified with 1000-frame average)
 - [ ] Code reduction: ~465 lines net removed
 
 ---
