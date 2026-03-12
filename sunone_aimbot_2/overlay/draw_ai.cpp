@@ -17,7 +17,6 @@
 
 std::string prev_backend = config.backend;
 float prev_confidence_threshold = config.confidence_threshold;
-float prev_nms_threshold = config.nms_threshold;
 int prev_max_detections = config.max_detections;
 
 static bool wasExporting = false;
@@ -29,7 +28,6 @@ void draw_ai()
     {
         prev_backend = config.backend;
         prev_confidence_threshold = config.confidence_threshold;
-        prev_nms_threshold = config.nms_threshold;
         prev_max_detections = config.max_detections;
         ai_state_initialized = true;
     }
@@ -150,7 +148,6 @@ void draw_ai()
     if (OverlayUI::BeginSection("Detection", "ai_section_detection"))
     {
         ImGui::SliderFloat("Confidence Threshold", &config.confidence_threshold, 0.01f, 1.00f, "%.2f");
-        ImGui::SliderFloat("NMS Threshold", &config.nms_threshold, 0.00f, 1.00f, "%.2f");
         ImGui::SliderInt("Max Detections", &config.max_detections, 1, 100);
         OverlayUI::EndSection();
     }
@@ -158,10 +155,8 @@ void draw_ai()
     draw_depth();
         
     if (prev_confidence_threshold != config.confidence_threshold ||
-        prev_nms_threshold != config.nms_threshold ||
         prev_max_detections != config.max_detections)
     {
-        prev_nms_threshold = config.nms_threshold;
         prev_confidence_threshold = config.confidence_threshold;
         prev_max_detections = config.max_detections;
         OverlayConfig_MarkDirty();
