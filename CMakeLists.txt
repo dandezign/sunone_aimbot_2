@@ -52,7 +52,7 @@ set(AIMBOT_OPENCV_LIBRARY "${_opencv_vc_dir}/lib/opencv_world4130.lib" CACHE FIL
 set(AIMBOT_OPENCV_DLL "${_opencv_vc_dir}/bin/opencv_world4130.dll" CACHE FILEPATH "Path to opencv_world4130.dll")
 set(AIMBOT_TENSORRT_ROOT "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/TensorRT-10.14.1.48" CACHE PATH "Path to TensorRT root directory")
 set(AIMBOT_GHUB_MOUSE_DLL "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/ghub_mouse.dll" CACHE FILEPATH "Path to ghub_mouse.dll")
-set(AIMBOT_CUDNN_ROOT "$ENV{ProgramW6432}/NVIDIA/CUDNN/v9.17" CACHE PATH "Path to cuDNN root directory (optional)")
+set(AIMBOT_CUDNN_ROOT "$ENV{ProgramW6432}/NVIDIA/CUDNN/v9.20" CACHE PATH "Path to cuDNN root directory (optional)")
 set(AIMBOT_CPPWINRT_INCLUDE_DIR "" CACHE PATH "Path to Windows SDK cppwinrt include directory")
 
 function(aimbot_pick_latest_dir out_var glob_pattern)
@@ -328,8 +328,22 @@ if(AIMBOT_USE_CUDA)
         nvonnxparser_10
     )
 
-    if(EXISTS "${AIMBOT_CUDNN_ROOT}/include/13.1/cudnn.h")
-        target_include_directories(ai PRIVATE "${AIMBOT_CUDNN_ROOT}/include/13.1")
+    set(_aimbot_cudnn_include_dir "")
+    set(_aimbot_cudnn_include_candidates
+        "${AIMBOT_CUDNN_ROOT}/include/13.2"
+        "${AIMBOT_CUDNN_ROOT}/include/13.1"
+        "${AIMBOT_CUDNN_ROOT}/include/13.0"
+        "${AIMBOT_CUDNN_ROOT}/include/12.9"
+        "${AIMBOT_CUDNN_ROOT}/include"
+    )
+    foreach(_candidate IN LISTS _aimbot_cudnn_include_candidates)
+        if(EXISTS "${_candidate}/cudnn.h")
+            set(_aimbot_cudnn_include_dir "${_candidate}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _aimbot_cudnn_include_dir STREQUAL "")
+        target_include_directories(ai PRIVATE "${_aimbot_cudnn_include_dir}")
     endif()
 endif()
 
@@ -352,9 +366,16 @@ if(AIMBOT_COPY_RUNTIME_DLLS)
 
         set(_aimbot_cudnn_runtime_dll "")
         set(_aimbot_cudnn_runtime_candidates
+            "${AIMBOT_CUDNN_ROOT}/bin/13.2/x64/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/bin/13.1/x64/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/bin/13.0/x64/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/bin/12.9/x64/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/bin/13.2/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/bin/13.1/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/bin/13.0/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/bin/12.9/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/bin/cudnn64_9.dll"
+            "${AIMBOT_CUDNN_ROOT}/lib/13.2/x64/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/lib/13.1/x64/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/lib/12.9/x64/cudnn64_9.dll"
             "${AIMBOT_CUDNN_ROOT}/lib/x64/cudnn64_9.dll"

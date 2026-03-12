@@ -11,7 +11,7 @@
 - OpenCV 4.13.0
 - Optional for CUDA build:
   - CUDA Toolkit 13.1
-  - cuDNN 9.17.1
+  - cuDNN 9.20.0
   - TensorRT 10.14.1.48
 
 ### Build configurations
@@ -25,6 +25,8 @@
 2. Place required DLLs next to executable.
 3. Run `ai.exe`.
 4. Open overlay with `Home`.
+
+For the exact CUDA CMake command and post-build checklist, see [cuda-build-run.md](cuda-build-run.md).
 
 ## FAQ
 

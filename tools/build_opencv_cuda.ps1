@@ -12,7 +12,7 @@ param(
     [ValidateSet("Release", "RelWithDebInfo", "MinSizeRel", "Debug")]
     [string]$Configuration = "Release",
     [string]$CudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
-    [string]$CudnnRoot = "C:\Program Files\NVIDIA\CUDNN\v9.17",
+    [string]$CudnnRoot = "C:\Program Files\NVIDIA\CUDNN\v9.20",
     [string]$CudaArchBin = "",
     [switch]$AutoDetectCudaArch,
     [switch]$DisableCuDNN,
@@ -299,16 +299,50 @@ try {
     }
 
     $cudaVersion = [System.IO.Path]::GetFileName($CudaPath.TrimEnd("\", "/")) -replace "^[vV]", ""
+    $cudaVersionParts = $cudaVersion -split "\."
+    $cudaMajor = if ($cudaVersionParts.Count -gt 0) { $cudaVersionParts[0] } else { "" }
 
     $cudnnIncludeDir = ""
     $cudnnLibPath = ""
     if (-not $DisableCuDNN) {
-        $cudnnHeader = Find-FirstExistingFile @(
-            (Join-Path $CudnnRoot ("include\" + $cudaVersion + "\cudnn.h")),
-            (Join-Path $CudnnRoot "include\13.1\cudnn.h"),
-            (Join-Path $CudnnRoot "include\12.9\cudnn.h"),
-            (Join-Path $CudnnRoot "include\cudnn.h")
+        $cudnnHeaderCandidates = @(
+            (Join-Path $CudnnRoot ("include\" + $cudaVersion + "\cudnn.h"))
         )
+        $cudnnLibCandidates = @(
+            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\x64\cudnn.lib")),
+            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\x64\cudnn64_9.lib")),
+            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\cudnn.lib"))
+        )
+
+        if ($cudaMajor -eq "13") {
+            $cudnnHeaderCandidates += @(
+                (Join-Path $CudnnRoot "include\13.2\cudnn.h"),
+                (Join-Path $CudnnRoot "include\13.1\cudnn.h"),
+                (Join-Path $CudnnRoot "include\13.0\cudnn.h")
+            )
+            $cudnnLibCandidates += @(
+                (Join-Path $CudnnRoot "lib\13.2\x64\cudnn.lib"),
+                (Join-Path $CudnnRoot "lib\13.2\x64\cudnn64_9.lib"),
+                (Join-Path $CudnnRoot "lib\13.1\x64\cudnn.lib"),
+                (Join-Path $CudnnRoot "lib\13.1\x64\cudnn64_9.lib"),
+                (Join-Path $CudnnRoot "lib\13.0\x64\cudnn.lib"),
+                (Join-Path $CudnnRoot "lib\13.0\x64\cudnn64_9.lib")
+            )
+        }
+        elseif ($cudaMajor -eq "12") {
+            $cudnnHeaderCandidates += @(
+                (Join-Path $CudnnRoot "include\12.9\cudnn.h")
+            )
+            $cudnnLibCandidates += @(
+                (Join-Path $CudnnRoot "lib\12.9\x64\cudnn.lib"),
+                (Join-Path $CudnnRoot "lib\12.9\x64\cudnn64_9.lib")
+            )
+        }
+
+        $cudnnHeaderCandidates += (Join-Path $CudnnRoot "include\cudnn.h")
+        $cudnnLibCandidates += (Join-Path $CudnnRoot "lib\x64\cudnn.lib")
+
+        $cudnnHeader = Find-FirstExistingFile $cudnnHeaderCandidates
         if (-not $cudnnHeader) {
             $cudnnHeader = Find-FirstFileRecursive -Root (Join-Path $CudnnRoot "include") -Patterns @("cudnn.h")
         }
@@ -317,17 +351,7 @@ try {
         }
         $cudnnIncludeDir = Split-Path -Parent $cudnnHeader
 
-        $cudnnLibPath = Find-FirstExistingFile @(
-            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\x64\cudnn.lib")),
-            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\cudnn.lib")),
-            (Join-Path $CudnnRoot ("lib\" + $cudaVersion + "\x64\cudnn64_9.lib")),
-            (Join-Path $CudnnRoot "lib\13.1\cudnn.lib"),
-            (Join-Path $CudnnRoot "lib\13.1\x64\cudnn.lib"),
-            (Join-Path $CudnnRoot "lib\13.1\x64\cudnn64_9.lib"),
-            (Join-Path $CudnnRoot "lib\12.9\x64\cudnn.lib"),
-            (Join-Path $CudnnRoot "lib\12.9\x64\cudnn64_9.lib"),
-            (Join-Path $CudnnRoot "lib\x64\cudnn.lib")
-        )
+        $cudnnLibPath = Find-FirstExistingFile $cudnnLibCandidates
         if (-not $cudnnLibPath) {
             $cudnnLibPath = Find-FirstFileRecursive -Root (Join-Path $CudnnRoot "lib") -Patterns @("cudnn.lib", "cudnn64_*.lib")
         }

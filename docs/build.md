@@ -12,7 +12,7 @@ If you want to compile the project yourself or modify code, follow these instruc
 * **\[For CUDA version]**
 
   * [CUDA Toolkit 13.1](https://developer.nvidia.com/cuda-13-1-0-download-archive)
-  * [cuDNN 9.17.1](https://developer.nvidia.com/cudnn-downloads)
+  * [cuDNN 9.20.0](https://developer.nvidia.com/cudnn-downloads)
   * [TensorRT-10.14.1.48](https://developer.nvidia.com/tensorrt/download/10x)
 * **\[For DML version]**
 
@@ -96,6 +96,12 @@ powershell -ExecutionPolicy Bypass -File tools/build_opencv_cuda.ps1 -AutoDetect
 
 The script requires CMake generator `Visual Studio 18 2026`.
 
+For CUDA 13.1 with cuDNN 9.20, point the script at your cuDNN install if needed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build_opencv_cuda.ps1 -AutoDetectCudaArch -CudnnRoot "C:/Program Files/NVIDIA/CUDNN/v9.20"
+```
+
 Useful options:
 
 * Set architecture explicitly:
@@ -130,7 +136,7 @@ Useful options:
 	* [OpenCV Contrib 4.13.0](https://github.com/opencv/opencv_contrib/releases/tag/4.13.0)
 	* [CMake](https://cmake.org/download/)
 	* [CUDA Toolkit 13.1](https://developer.nvidia.com/cuda-13-1-0-download-archive)
-	* [cuDNN 9.17.1](https://developer.nvidia.com/cudnn-downloads)
+  * [cuDNN 9.20.0](https://developer.nvidia.com/cudnn-downloads)
 
 2. **Prepare Directories**
 
@@ -141,8 +147,8 @@ Useful options:
 		`sunone_aimbot_2/sunone_aimbot_2/modules/opencv/opencv-4.13.0`
 	* Extract `opencv_contrib-4.13.0` into
 		`sunone_aimbot_2/sunone_aimbot_2/modules/opencv/opencv_contrib-4.13.0`
-	* install cuDNN
-		Default install path `C:/Program Files/NVIDIA/CUDNN/v9.17`
+  * install cuDNN
+    Default install path `C:/Program Files/NVIDIA/CUDNN/v9.20`
 
 3. **Configure with CMake**
 
@@ -163,10 +169,10 @@ Useful options:
 		* `ENABLE_FAST_MATH` = ON
 		* `CUDA_FAST_MATH` = ON
 		* `WITH_CUDNN` = ON
-		* `CUDNN_LIBRARY` =
-			`.../sunone_aimbot_2/sunone_aimbot_2/modules/cudnn/lib/x64/cudnn.lib`
-		* `CUDNN_INCLUDE_DIR` =
-			`.../sunone_aimbot_2/sunone_aimbot_2/modules/cudnn/include`
+    * `CUDNN_LIBRARY` =
+      For CUDA 13.1 + cuDNN 9.20, use `C:/Program Files/NVIDIA/CUDNN/v9.20/lib/13.2/x64/cudnn.lib`
+    * `CUDNN_INCLUDE_DIR` =
+      For CUDA 13.1 + cuDNN 9.20, use `C:/Program Files/NVIDIA/CUDNN/v9.20/include/13.2`
 		* `CUDA_ARCH_BIN` =
 			See [CUDA Wikipedia](https://en.wikipedia.org/wiki/CUDA) for your GPU.
 			Example for RTX 3080-Ti: `8.6`
@@ -238,10 +244,22 @@ Use separate build directories for each backend:
 
   ```powershell
   cmake -S . -B build/cuda -G "Visual Studio 18 2026" -A x64 `
+    -T "cuda=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" `
     -DAIMBOT_USE_CUDA=ON `
     -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler" `
     -DCUDA_NVCC_FLAGS="--allow-unsupported-compiler"
   cmake --build build/cuda --config Release
+  ```
+
+  If CMake fails with `No CUDA toolset found.`, Visual Studio does not have the CUDA build customization registered. In that case, keep the `-T "cuda=..."` argument shown above and point it at your CUDA 13.1 install.
+
+  Successful configure should report lines similar to:
+
+  ```text
+  -- The CUDA compiler identification is NVIDIA 13.1.80
+  -- Found CUDAToolkit: C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/include
+  -- Aimbot backend: ON
+  -- OpenCV lib: .../sunone_aimbot_2/modules/opencv/build/install/x64/vc18/lib/opencv_world4130.lib
   ```
 
 Only `Visual Studio 18 2026` is supported for this project.
@@ -252,13 +270,27 @@ If your dependencies are stored in non-default paths, pass CMake cache variables
 cmake -S . -B build/dml -G "Visual Studio 18 2026" -A x64 `
   -DAIMBOT_OPENCV_INCLUDE_DIR="C:/opencv/include" `
   -DAIMBOT_OPENCV_LIBRARY="C:/opencv/lib/opencv_world4130.lib" `
-  -DAIMBOT_ONNXRUNTIME_DIR="C:/packages/Microsoft.ML.OnnxRuntime.DirectML.1.22.0" `
+  -DAIMBOT_ONNXRUNTIME_DIR="C:/packages/Microsoft.ML.OnnxRuntime.DirectML.1.24.3" `
   -DAIMBOT_CPPWINRT_INCLUDE_DIR="C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/cppwinrt"
+```
+
+For CUDA builds, you can also override the TensorRT and cuDNN roots if needed:
+
+```powershell
+cmake -S . -B build/cuda -G "Visual Studio 18 2026" -A x64 `
+  -T "cuda=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" `
+  -DAIMBOT_USE_CUDA=ON `
+  -DAIMBOT_TENSORRT_ROOT="C:/path/to/TensorRT-10.14.1.48" `
+  -DAIMBOT_CUDNN_ROOT="C:/Program Files/NVIDIA/CUDNN/v9.20" `
+  -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler" `
+  -DCUDA_NVCC_FLAGS="--allow-unsupported-compiler"
 ```
 
 You can open the generated solution from the build folder (`build/dml` or `build/cuda`) if you prefer building from Visual Studio UI.
 
 Run `ai.exe` from `<build-dir>/Release/`.
+
+For a CUDA post-build checklist and first-run behavior, see [cuda-build-run.md](cuda-build-run.md).
 
 ## 6. Exporting AI Models
 

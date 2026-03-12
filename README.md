@@ -91,6 +91,8 @@ Precompiled `.exe` builds are provided for both CUDA (NVIDIA only) and DirectML 
 
 * C++ config reference (`config.ini`):
   [docs/config.md](docs/config.md)
+* CUDA build and first-run checklist:
+  [docs/cuda-build-run.md](docs/cuda-build-run.md)
 * Setup, FAQ, troubleshooting:
   [docs/guides.md](docs/guides.md)
 * Source of truth in code:
