@@ -14,7 +14,7 @@
 
 #include "dml_detector.h"
 #include "sunone_aimbot_2.h"
-#include "postProcess.h"
+// postProcess.h removed - YOLO26 doesn't use NMS
 #include "capture.h"
 #include "other_tools.h"
 #ifdef USE_CUDA
@@ -123,6 +123,80 @@ void filterDetectionsByDepthMask(std::vector<Detection>&)
 {
 }
 #endif
+
+// YOLO26 decoder - replaces postProcessYoloDML for NMS-free inference
+std::vector<Detection> decodeYolo26Outputs(
+    const float* output,
+    const std::vector<int64_t>& shape,
+    int numClasses,
+    float confThreshold,
+    int imageWidth,
+    int imageHeight)
+{
+    std::vector<Detection> detections;
+    
+    // Validate input pointer
+    if (!output) {
+        return detections;
+    }
+    
+    // Validate output shape: expect (N, 300, 6) or flat (1800,)
+    const int64_t expectedSize = 300 * 6;
+    const int64_t actualSize = shape.empty() ? 1800 : 
+                               (shape.size() == 1 ? shape[0] : 
+                                shape[0] * shape[1]);
+    
+    if (actualSize != expectedSize) {
+        std::cerr << "[YOLO26] Warning: unexpected output shape " 
+                  << "(expected " << expectedSize << ", got " << actualSize << ")" << std::endl;
+        return detections;
+    }
+    
+    // YOLO26 output: (N, 300, 6)
+    // Format: [x, y, w, h, conf, class_id]
+    
+    for (int i = 0; i < 300; i++) {
+        float conf = output[i * 6 + 4];
+        
+        // Skip low-confidence detections
+        if (conf < confThreshold || std::isnan(conf) || std::isinf(conf)) {
+            continue;
+        }
+        
+        float x = output[i * 6 + 0];
+        float y = output[i * 6 + 1];
+        float w = output[i * 6 + 2];
+        float h = output[i * 6 + 3];
+        float classIdFloat = output[i * 6 + 5];
+        
+        // Validate coordinates (reject NaN/inf/negative)
+        if (std::isnan(x) || std::isnan(y) || std::isnan(w) || std::isnan(h) ||
+            std::isinf(x) || std::isinf(y) || std::isinf(w) || std::isinf(h) ||
+            x < 0 || y < 0 || w <= 0 || h <= 0) {
+            continue;
+        }
+        
+        // Validate classId bounds
+        int classId = static_cast<int>(classIdFloat);
+        if (classId < 0 || classId >= numClasses) {
+            continue;
+        }
+        
+        // Clamp to image bounds
+        int clampedX = std::max(0, std::min(static_cast<int>(x), imageWidth - 1));
+        int clampedY = std::max(0, std::min(static_cast<int>(y), imageHeight - 1));
+        int clampedW = std::min(static_cast<int>(w), imageWidth - clampedX);
+        int clampedH = std::min(static_cast<int>(h), imageHeight - clampedY);
+        
+        detections.push_back({
+            cv::Rect(clampedX, clampedY, clampedW, clampedH),
+            conf,
+            classId
+        });
+    }
+    
+    return detections;
+}
 }
 
 std::string GetDMLDeviceName(int deviceId)
@@ -310,10 +384,8 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
 
     std::vector<std::vector<Detection>> batchDetections(batch_size);
     float conf_thr = config.confidence_threshold;
-    float nms_thr = config.nms_threshold;
 
     auto t4 = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> nmsTimeTmp{ 0 };
 
     for (size_t b = 0; b < batch_size; ++b)
     {
@@ -321,7 +393,10 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         std::vector<Detection> detections;
 
         std::vector<int64_t> shp = { static_cast<int64_t>(rows), static_cast<int64_t>(cols) };
-        detections = postProcessYoloDML(ptr, shp, num_classes, conf_thr, nms_thr, &nmsTimeTmp);
+        detections = decodeYolo26Outputs(
+            ptr, shp, num_classes, conf_thr,
+            config.detection_resolution, config.detection_resolution
+        );
 
         if (useFixed && (target_w != config.detection_resolution))
         {
@@ -343,7 +418,7 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
     lastInferenceTimeDML = t3 - t2;
     lastCopyTimeDML = t4 - t3;
     lastPostprocessTimeDML = t5 - t4;
-    lastNmsTimeDML = nmsTimeTmp;
+    // lastNmsTimeDML removed - YOLO26 doesn't use NMS
 
     return batchDetections;
 }
