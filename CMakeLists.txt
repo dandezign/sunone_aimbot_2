@@ -141,7 +141,6 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/depth/depth_utils.cpp"
     "${SRC_DIR}/detector/detection_buffer.cpp"
     "${SRC_DIR}/detector/dml_detector.cpp"
-    "${SRC_DIR}/detector/postProcess.cpp"
     "${SRC_DIR}/imgui/imgui.cpp"
     "${SRC_DIR}/imgui/imgui_draw.cpp"
     "${SRC_DIR}/imgui/imgui_impl_dx11.cpp"
