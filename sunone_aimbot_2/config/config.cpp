@@ -137,7 +137,7 @@ bool Config::loadConfig(const std::string& filename)
 #endif
 
         confidence_threshold = 0.10f;
-        nms_threshold = 0.50f;
+        // nms_threshold removed - YOLO26 doesn't use NMS
         max_detections = 100;
 #ifdef USE_CUDA
         export_enable_fp8 = false;
@@ -433,7 +433,7 @@ bool Config::loadConfig(const std::string& filename)
     ai_model = get_string("ai_model", "sunxds_0.8.0.onnx");
 #endif
     confidence_threshold = (float)get_double("confidence_threshold", 0.15);
-    nms_threshold = (float)get_double("nms_threshold", 0.50);
+    // nms_threshold removed - YOLO26 doesn't use NMS
     max_detections = get_long("max_detections", 20);
 #ifdef USE_CUDA
     export_enable_fp8 = get_bool("export_enable_fp8", true);
@@ -694,8 +694,6 @@ bool Config::saveConfig(const std::string& filename)
         << "ai_model = " << ai_model << "\n"
         << std::fixed << std::setprecision(2)
         << "confidence_threshold = " << confidence_threshold << "\n"
-        << "nms_threshold = " << nms_threshold << "\n"
-        << std::setprecision(0)
         << "max_detections = " << max_detections << "\n"
 #ifdef USE_CUDA
         << "export_enable_fp8 = " << (export_enable_fp8 ? "true" : "false") << "\n"

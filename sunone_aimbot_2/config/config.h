@@ -84,7 +84,7 @@ public:
     int dml_device_id;
     std::string ai_model;
     float confidence_threshold;
-    float nms_threshold;
+    // nms_threshold removed - YOLO26 doesn't use NMS
     int max_detections;
 #ifdef USE_CUDA
     bool export_enable_fp8;
