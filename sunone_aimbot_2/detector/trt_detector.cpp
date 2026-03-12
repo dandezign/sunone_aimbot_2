@@ -22,7 +22,7 @@
 #include "nvinf.h"
 #include "sunone_aimbot_2.h"
 #include "other_tools.h"
-#include "postProcess.h"
+// postProcess.h removed - YOLO26 doesn't use NMS
 #include "cuda_preprocess.h"
 #include "depth/depth_mask.h"
 #include "capture.h"
@@ -69,6 +69,80 @@ bool intersectsDepthMask(const cv::Rect& box, const cv::Mat& mask)
 
     const cv::Mat roi = mask(clipped);
     return cv::countNonZero(roi) > 0;
+}
+
+// YOLO26 decoder - replaces postProcessYolo for NMS-free inference
+std::vector<Detection> decodeYolo26Outputs(
+    const float* output,
+    const std::vector<int64_t>& shape,
+    int numClasses,
+    float confThreshold,
+    int imageWidth,
+    int imageHeight)
+{
+    std::vector<Detection> detections;
+    
+    // Validate input pointer
+    if (!output) {
+        return detections;  // Return empty vector on null input
+    }
+    
+    // Validate output shape: expect (N, 300, 6) or flat (1800,)
+    const int64_t expectedSize = 300 * 6;
+    const int64_t actualSize = shape.empty() ? 1800 : 
+                               (shape.size() == 1 ? shape[0] : 
+                                shape[1] * shape[2]);
+    
+    if (actualSize != expectedSize) {
+        std::cerr << "[YOLO26] Warning: unexpected output shape " 
+                  << "(expected " << expectedSize << ", got " << actualSize << ")" << std::endl;
+        return detections;  // Return empty on shape mismatch
+    }
+    
+    // YOLO26 output: (N, 300, 6)
+    // Format: [x, y, w, h, conf, class_id]
+    
+    for (int i = 0; i < 300; i++) {
+        float conf = output[i * 6 + 4];
+        
+        // Skip low-confidence detections
+        if (conf < confThreshold || std::isnan(conf) || std::isinf(conf)) {
+            continue;
+        }
+        
+        float x = output[i * 6 + 0];
+        float y = output[i * 6 + 1];
+        float w = output[i * 6 + 2];
+        float h = output[i * 6 + 3];
+        float classIdFloat = output[i * 6 + 5];
+        
+        // Validate coordinates (reject NaN/inf/negative)
+        if (std::isnan(x) || std::isnan(y) || std::isnan(w) || std::isnan(h) ||
+            std::isinf(x) || std::isinf(y) || std::isinf(w) || std::isinf(h) ||
+            x < 0 || y < 0 || w <= 0 || h <= 0) {
+            continue;
+        }
+        
+        // Validate classId bounds
+        int classId = static_cast<int>(classIdFloat);
+        if (classId < 0 || classId >= numClasses) {
+            continue;  // Skip invalid class IDs
+        }
+        
+        // Clamp to image bounds
+        int clampedX = std::max(0, std::min(static_cast<int>(x), imageWidth - 1));
+        int clampedY = std::max(0, std::min(static_cast<int>(y), imageHeight - 1));
+        int clampedW = std::min(static_cast<int>(w), imageWidth - clampedX);
+        int clampedH = std::min(static_cast<int>(h), imageHeight - clampedY);
+        
+        detections.push_back({
+            cv::Rect(clampedX, clampedY, clampedW, clampedH),
+            conf,
+            classId
+        });
+    }
+    
+    return detections;
 }
 
 void filterDetectionsByDepthMask(std::vector<Detection>& detections)
@@ -798,12 +872,12 @@ void TrtDetector::inferenceThread()
                         for (size_t i = 0; i < numElements; ++i)
                             outputDataFloat[i] = __half2float(halfPtr[i]);
 
-                        postProcess(outputDataFloat.data(), name, &lastNmsTime);
+                        decodeOutputs(outputDataFloat.data(), name);
                     }
                     else if (dtype == nvinfer1::DataType::kFLOAT)
                     {
                         const float* floatPtr = reinterpret_cast<const float*>(itPinned->second);
-                        postProcess(floatPtr, name, &lastNmsTime);
+                        decodeOutputs(floatPtr, name);
                     }
                 }
 
@@ -898,7 +972,7 @@ void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
     }
 }
 
-void TrtDetector::postProcess(const float* output, const std::string& outputName, std::chrono::duration<double, std::milli>* nmsTime)
+void TrtDetector::decodeOutputs(const float* output, const std::string& outputName)
 {
     if (numClasses <= 0) return;
 
@@ -908,13 +982,17 @@ void TrtDetector::postProcess(const float* output, const std::string& outputName
 
     std::vector<Detection> detections;
     
-    detections = postProcessYolo(
+    // Get image dimensions for bounds clamping
+    int imageWidth = config.detection_resolution;
+    int imageHeight = config.detection_resolution;
+    
+    detections = decodeYolo26Outputs(
         output,
         shapeIt->second,
         numClasses,
         config.confidence_threshold,
-        config.nms_threshold,
-        nmsTime
+        imageWidth,
+        imageHeight
     );
     filterDetectionsByDepthMask(detections);
 
