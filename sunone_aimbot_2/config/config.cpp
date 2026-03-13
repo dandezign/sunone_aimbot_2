@@ -248,6 +248,18 @@ bool Config::loadConfig(const std::string& filename)
         screenshot_delay = 500;
         verbose = false;
 
+        // Training - Label
+        training_label_enabled = false;
+        training_label_hotkey = splitString("F8");
+        training_label_prompt = "";
+        training_label_class = "player";
+        training_label_split = "train";
+        training_label_save_negatives = false;
+        training_label_image_format = ".jpg";
+        training_label_preview_enabled = true;
+        training_label_preview_interval_ms = 500;
+        training_sam3_engine_path = "";
+
         // Game profiles
         game_profiles.clear();
         GameProfile uni;
@@ -581,6 +593,18 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_delay = get_long("screenshot_delay", 500);
     verbose = get_bool("verbose", false);
 
+    // Training - Label
+    training_label_enabled = get_bool("training_label_enabled", false);
+    training_label_hotkey = splitString(get_string("training_label_hotkey", "F8"));
+    training_label_prompt = get_string("training_label_prompt", "");
+    training_label_class = get_string("training_label_class", "player");
+    training_label_split = get_string("training_label_split", "train");
+    training_label_save_negatives = get_bool("training_label_save_negatives", false);
+    training_label_image_format = get_string("training_label_image_format", ".jpg");
+    training_label_preview_enabled = get_bool("training_label_preview_enabled", true);
+    training_label_preview_interval_ms = get_long("training_label_preview_interval_ms", 500);
+    training_sam3_engine_path = get_string("training_sam3_engine_path", "");
+
     return true;
 }
 
@@ -815,6 +839,19 @@ bool Config::saveConfig(const std::string& filename)
         << "screenshot_button = " << joinStrings(screenshot_button) << "\n"
         << "screenshot_delay = " << screenshot_delay << "\n"
         << "verbose = " << (verbose ? "true" : "false") << "\n\n";
+
+    // Training - Label
+    file << "# Training - Label\n"
+        << "training_label_enabled = " << (training_label_enabled ? "true" : "false") << "\n"
+        << "training_label_hotkey = " << joinStrings(training_label_hotkey) << "\n"
+        << "training_label_prompt = " << training_label_prompt << "\n"
+        << "training_label_class = " << training_label_class << "\n"
+        << "training_label_split = " << training_label_split << "\n"
+        << "training_label_save_negatives = " << (training_label_save_negatives ? "true" : "false") << "\n"
+        << "training_label_image_format = " << training_label_image_format << "\n"
+        << "training_label_preview_enabled = " << (training_label_preview_enabled ? "true" : "false") << "\n"
+        << "training_label_preview_interval_ms = " << training_label_preview_interval_ms << "\n"
+        << "training_sam3_engine_path = " << training_sam3_engine_path << "\n\n";
 
     // Active game
     file << "# Active game profile\n";

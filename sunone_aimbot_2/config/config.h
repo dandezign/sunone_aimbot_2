@@ -208,6 +208,18 @@ public:
     int screenshot_delay;
     bool verbose;
 
+    // Training - Label
+    bool training_label_enabled;
+    std::vector<std::string> training_label_hotkey;
+    std::string training_label_prompt;
+    std::string training_label_class;
+    std::string training_label_split;  // "train" or "val"
+    bool training_label_save_negatives;
+    std::string training_label_image_format;  // ".jpg" or ".png"
+    bool training_label_preview_enabled;
+    int training_label_preview_interval_ms;
+    std::string training_sam3_engine_path;
+
     struct GameProfile
     {
         std::string name;
