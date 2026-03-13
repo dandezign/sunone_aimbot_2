@@ -1,4 +1,5 @@
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
+#include "sunone_aimbot_2/debug/detection_debug_export.h"
 #include <cassert>
 #include <string>
 
@@ -23,6 +24,24 @@ int main() {
 
     auto second = detection_debug::GetSharedStateSnapshot();
     assert(second.detector.backend == "TRT");
+
+    const auto bundleId = detection_debug::MakeBundleIdForTests("2026-03-13T21:10:44.182Z");
+    assert(bundleId.find("yolo26_debug") != std::string::npos);
+
+    detection_debug::BundleSnapshot bundleSnapshot;
+    bundleSnapshot.exportTimestampUtc = "2026-03-13T21:10:44.182Z";
+    bundleSnapshot.bundleId = bundleId;
+    const auto jsonText = detection_debug::BuildBundleJson(bundleSnapshot);
+    assert(jsonText.find("\"export_timestamp\"") != std::string::npos);
+    assert(jsonText.find("\"detector\"") != std::string::npos);
+    assert(jsonText.find("\"detections\"") != std::string::npos);
+
+    detection_debug::BundleSnapshot nullTestSnapshot;
+    nullTestSnapshot.exportTimestampUtc = "2026-03-13T21:10:44.182Z";
+    nullTestSnapshot.bundleId = "2026-03-13_21-10-44-182_yolo26_debug";
+    const std::string json = detection_debug::BuildBundleJson(nullTestSnapshot);
+    assert(json.find("\"output_shape\":[]") != std::string::npos);
+    assert(json.find("\"x_gain\":null") != std::string::npos);
 
     return 0;
 }

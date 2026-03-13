@@ -137,6 +137,7 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/capture/winrt_capture.cpp"
     "${SRC_DIR}/config/config.cpp"
     "${SRC_DIR}/debug/detection_debug_state.cpp"
+    "${SRC_DIR}/debug/detection_debug_export.cpp"
     "${SRC_DIR}/depth/depth_anything_trt.cpp"
     "${SRC_DIR}/depth/depth_mask.cpp"
     "${SRC_DIR}/depth/depth_utils.cpp"
@@ -405,17 +406,24 @@ message(STATUS "C++/WinRT include: ${AIMBOT_CPPWINRT_INCLUDE_DIR}")
 add_executable(detection_debug_tools_tests
     "${CMAKE_SOURCE_DIR}/tests/detection_debug_tools_test.cpp"
     "${SRC_DIR}/debug/detection_debug_state.cpp"
+    "${SRC_DIR}/debug/detection_debug_export.cpp"
 )
 
 target_include_directories(detection_debug_tools_tests PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${SRC_DIR}"
+    "${AIMBOT_OPENCV_INCLUDE_DIR}"
 )
 
 target_compile_definitions(detection_debug_tools_tests PRIVATE
     UNICODE
     _UNICODE
     _CONSOLE
+    DETECTION_DEBUG_EXPORT_STUBS
+)
+
+target_link_libraries(detection_debug_tools_tests PRIVATE
+    "${AIMBOT_OPENCV_LIBRARY}"
 )
 
 if(MSVC)
