@@ -125,13 +125,15 @@ void filterDetectionsByDepthMask(std::vector<Detection>&)
 #endif
 
 // YOLO26 decoder - replaces postProcessYoloDML for NMS-free inference
+// Outputs are in model space (640x640), need to scale to game space
 std::vector<Detection> decodeYolo26Outputs(
     const float* output,
     const std::vector<int64_t>& shape,
     int numClasses,
     float confThreshold,
-    int imageWidth,
-    int imageHeight)
+    float x_gain,  // Scale from model X to game X
+    float y_gain   // Scale from model Y to game Y
+)
 {
     std::vector<Detection> detections;
     
@@ -153,7 +155,7 @@ std::vector<Detection> decodeYolo26Outputs(
     }
     
     // YOLO26 output: (N, 300, 6)
-    // Format: [x, y, w, h, conf, class_id]
+    // Format: [x, y, w, h, conf, class_id] in MODEL SPACE (640x640)
     
     for (int i = 0; i < 300; i++) {
         float conf = output[i * 6 + 4];
@@ -163,16 +165,17 @@ std::vector<Detection> decodeYolo26Outputs(
             continue;
         }
         
-        float x = output[i * 6 + 0];
-        float y = output[i * 6 + 1];
-        float w = output[i * 6 + 2];
-        float h = output[i * 6 + 3];
+        // Coordinates in model space (640x640)
+        float model_x = output[i * 6 + 0];
+        float model_y = output[i * 6 + 1];
+        float model_w = output[i * 6 + 2];
+        float model_h = output[i * 6 + 3];
         float classIdFloat = output[i * 6 + 5];
         
         // Validate coordinates (reject NaN/inf/negative)
-        if (std::isnan(x) || std::isnan(y) || std::isnan(w) || std::isnan(h) ||
-            std::isinf(x) || std::isinf(y) || std::isinf(w) || std::isinf(h) ||
-            x < 0 || y < 0 || w <= 0 || h <= 0) {
+        if (std::isnan(model_x) || std::isnan(model_y) || std::isnan(model_w) || std::isnan(model_h) ||
+            std::isinf(model_x) || std::isinf(model_y) || std::isinf(model_w) || std::isinf(model_h) ||
+            model_x < 0 || model_y < 0 || model_w <= 0 || model_h <= 0) {
             continue;
         }
         
@@ -182,14 +185,14 @@ std::vector<Detection> decodeYolo26Outputs(
             continue;
         }
         
-        // Clamp to image bounds
-        int clampedX = std::max(0, std::min(static_cast<int>(x), imageWidth - 1));
-        int clampedY = std::max(0, std::min(static_cast<int>(y), imageHeight - 1));
-        int clampedW = std::min(static_cast<int>(w), imageWidth - clampedX);
-        int clampedH = std::min(static_cast<int>(h), imageHeight - clampedY);
+        // SCALE FROM MODEL SPACE TO GAME SPACE
+        const int game_x = static_cast<int>(model_x * x_gain);
+        const int game_y = static_cast<int>(model_y * y_gain);
+        const int game_w = static_cast<int>(model_w * x_gain);
+        const int game_h = static_cast<int>(model_h * y_gain);
         
         detections.push_back({
-            cv::Rect(clampedX, clampedY, clampedW, clampedH),
+            cv::Rect(game_x, game_y, game_w, game_h),
             conf,
             classId
         });
@@ -393,22 +396,16 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         std::vector<Detection> detections;
 
         std::vector<int64_t> shp = { static_cast<int64_t>(rows), static_cast<int64_t>(cols) };
-        detections = decodeYolo26Outputs(
-            ptr, shp, num_classes, conf_thr,
-            config.detection_resolution, config.detection_resolution
-        );
-
-        if (useFixed && (target_w != config.detection_resolution))
-        {
-            float scale = static_cast<float>(config.detection_resolution) / target_w;
-            for (auto& d : detections)
-            {
-                d.box.x = static_cast<int>(d.box.x * scale);
-                d.box.y = static_cast<int>(d.box.y * scale);
-                d.box.width = static_cast<int>(d.box.width * scale);
-                d.box.height = static_cast<int>(d.box.height * scale);
-            }
-        }
+        
+        // Scale from model space (640x640) to game space
+        const int gameWidth = config.detection_resolution;
+        const int gameHeight = config.detection_resolution;
+        const float x_gain = static_cast<float>(gameWidth) / 640.0f;
+        const float y_gain = static_cast<float>(gameHeight) / 640.0f;
+        
+        detections = decodeYolo26Outputs(ptr, shp, num_classes, conf_thr, x_gain, y_gain);
+        
+        // No additional scaling needed - already scaled in decoder
 
         batchDetections[b] = std::move(detections);
     }

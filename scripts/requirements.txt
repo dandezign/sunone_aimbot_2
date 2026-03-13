@@ -1,0 +1,23 @@
+# YOLO26 Model Export & Training Requirements
+# For Sunone Aimbot 2 project
+# Python 3.12+
+
+# Core
+ultralytics>=8.3.0          # YOLO26 models
+
+# ONNX Export
+onnx>=1.16.0                # ONNX format support
+onnxruntime-gpu>=1.18.0     # ONNX Runtime with GPU support (CUDA)
+# onnxruntime>=1.18.0       # Use this instead if no NVIDIA GPU
+
+# TensorRT (NVIDIA GPU only)
+# tensorrt>=10.0.0          # Install via NVIDIA, not pip
+
+# Dataset & Training Utilities
+roboflow>=1.1.0             # Dataset management (optional)
+fiftyone>=0.25.0            # Dataset visualization (optional)
+
+# Development
+pytest>=8.0.0               # Testing
+black>=24.0.0               # Code formatting
+flake8>=7.0.0               # Linting

@@ -61,4 +61,7 @@ setup_opencv_dml_run.log
 setup_opencv_dml_run.log
 
 # zip files
-*.zip.worktrees
+*.zip
+.worktrees
+.venv
+.idea

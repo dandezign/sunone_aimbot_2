@@ -6,13 +6,7 @@
 #include <mutex>
 
 // postProcess.h removed - YOLO26 doesn't use NMS
-// Detection struct moved here
-struct Detection
-{
-    cv::Rect box;
-    float confidence;
-    int classId;
-};
+#include "detection_buffer.h"  // Contains Detection struct
 
 class DirectMLDetector
 {

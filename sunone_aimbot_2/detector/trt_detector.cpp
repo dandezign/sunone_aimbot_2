@@ -72,13 +72,15 @@ bool intersectsDepthMask(const cv::Rect& box, const cv::Mat& mask)
 }
 
 // YOLO26 decoder - replaces postProcessYolo for NMS-free inference
+// Outputs are in model space (640x640), need to scale to game space
 std::vector<Detection> decodeYolo26Outputs(
     const float* output,
     const std::vector<int64_t>& shape,
     int numClasses,
     float confThreshold,
-    int imageWidth,
-    int imageHeight)
+    float x_gain,  // Scale from model X to game X
+    float y_gain   // Scale from model Y to game Y
+)
 {
     std::vector<Detection> detections;
     
@@ -100,7 +102,7 @@ std::vector<Detection> decodeYolo26Outputs(
     }
     
     // YOLO26 output: (N, 300, 6)
-    // Format: [x, y, w, h, conf, class_id]
+    // Format: [x, y, w, h, conf, class_id] in MODEL SPACE (640x640)
     
     for (int i = 0; i < 300; i++) {
         float conf = output[i * 6 + 4];
@@ -110,16 +112,17 @@ std::vector<Detection> decodeYolo26Outputs(
             continue;
         }
         
-        float x = output[i * 6 + 0];
-        float y = output[i * 6 + 1];
-        float w = output[i * 6 + 2];
-        float h = output[i * 6 + 3];
+        // Coordinates in model space (640x640)
+        float model_x = output[i * 6 + 0];
+        float model_y = output[i * 6 + 1];
+        float model_w = output[i * 6 + 2];
+        float model_h = output[i * 6 + 3];
         float classIdFloat = output[i * 6 + 5];
         
         // Validate coordinates (reject NaN/inf/negative)
-        if (std::isnan(x) || std::isnan(y) || std::isnan(w) || std::isnan(h) ||
-            std::isinf(x) || std::isinf(y) || std::isinf(w) || std::isinf(h) ||
-            x < 0 || y < 0 || w <= 0 || h <= 0) {
+        if (std::isnan(model_x) || std::isnan(model_y) || std::isnan(model_w) || std::isnan(model_h) ||
+            std::isinf(model_x) || std::isinf(model_y) || std::isinf(model_w) || std::isinf(model_h) ||
+            model_x < 0 || model_y < 0 || model_w <= 0 || model_h <= 0) {
             continue;
         }
         
@@ -129,14 +132,14 @@ std::vector<Detection> decodeYolo26Outputs(
             continue;  // Skip invalid class IDs
         }
         
-        // Clamp to image bounds
-        int clampedX = std::max(0, std::min(static_cast<int>(x), imageWidth - 1));
-        int clampedY = std::max(0, std::min(static_cast<int>(y), imageHeight - 1));
-        int clampedW = std::min(static_cast<int>(w), imageWidth - clampedX);
-        int clampedH = std::min(static_cast<int>(h), imageHeight - clampedY);
+        // SCALE FROM MODEL SPACE TO GAME SPACE
+        const int game_x = static_cast<int>(model_x * x_gain);
+        const int game_y = static_cast<int>(model_y * y_gain);
+        const int game_w = static_cast<int>(model_w * x_gain);
+        const int game_h = static_cast<int>(model_h * y_gain);
         
         detections.push_back({
-            cv::Rect(clampedX, clampedY, clampedW, clampedH),
+            cv::Rect(game_x, game_y, game_w, game_h),
             conf,
             classId
         });
@@ -982,17 +985,23 @@ void TrtDetector::decodeOutputs(const float* output, const std::string& outputNa
 
     std::vector<Detection> detections;
     
-    // Get image dimensions for bounds clamping
-    int imageWidth = config.detection_resolution;
-    int imageHeight = config.detection_resolution;
+    // Get game resolution for scaling FROM model space TO game space
+    // Model outputs are in 640x640 space, need to scale to actual game resolution
+    const int gameWidth = config.detection_resolution;  // Game capture width
+    const int gameHeight = config.detection_resolution; // Game capture height
+    const int modelSize = 640; // YOLO26 model input size
+    
+    // Scale factors: model_coords * gain = game_coords
+    const float x_gain = static_cast<float>(gameWidth) / modelSize;
+    const float y_gain = static_cast<float>(gameHeight) / modelSize;
     
     detections = decodeYolo26Outputs(
         output,
         shapeIt->second,
         numClasses,
         config.confidence_threshold,
-        imageWidth,
-        imageHeight
+        x_gain,
+        y_gain
     );
     filterDetectionsByDepthMask(detections);
 

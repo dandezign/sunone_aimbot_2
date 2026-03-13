@@ -44,7 +44,7 @@ void draw_stats()
         current_inference = static_cast<float>(dml_detector->lastInferenceTimeDML.count());
         current_copy = static_cast<float>(dml_detector->lastCopyTimeDML.count());
         current_post = static_cast<float>(dml_detector->lastPostprocessTimeDML.count());
-        current_nms = static_cast<float>(dml_detector->lastNmsTimeDML.count());
+        current_nms = 0.0f;  // YOLO26 doesn't use NMS
     }
 #ifdef USE_CUDA
     else
@@ -53,7 +53,7 @@ void draw_stats()
         current_inference = static_cast<float>(trt_detector.lastInferenceTime.count());
         current_copy = static_cast<float>(trt_detector.lastCopyTime.count());
         current_post = static_cast<float>(trt_detector.lastPostprocessTime.count());
-        current_nms = static_cast<float>(trt_detector.lastNmsTime.count());
+        current_nms = 0.0f;  // YOLO26 doesn't use NMS
     }
 #endif
 

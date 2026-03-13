@@ -4,6 +4,14 @@
 #include <condition_variable>
 #include <opencv2/opencv.hpp>
 
+// Detection struct - moved here from postProcess.h (YOLO26 migration)
+struct Detection
+{
+    cv::Rect box;
+    float confidence;
+    int classId;
+};
+
 struct DetectionBuffer
 {
     std::mutex mutex;
