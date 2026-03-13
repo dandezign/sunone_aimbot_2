@@ -12,10 +12,10 @@ namespace detection_debug {
 inline constexpr size_t kMaxDebugEvents = 256;
 
 struct RawBoxDebug {
-    float x = 0.0f;
-    float y = 0.0f;
-    float w = 0.0f;
-    float h = 0.0f;
+    float x1 = 0.0f;
+    float y1 = 0.0f;
+    float x2 = 0.0f;
+    float y2 = 0.0f;
 };
 
 struct FinalBoxDebug {
@@ -60,9 +60,31 @@ struct SharedStateSnapshot {
     std::vector<std::string> eventLog;
 };
 
+struct TimedCaptureRequest {
+    int intervalMs = 1000;
+    int remainingShots = 1;
+    std::string prefix;
+};
+
+struct TimedCaptureState {
+    bool active = false;
+    int intervalMs = 1000;
+    int remainingShots = 0;
+    int completedShots = 0;
+    std::string prefix;
+    std::string lastStatus;
+    std::string lastPath;
+};
+
 void PublishDetectorSnapshot(const DetectorSnapshot& snapshot);
 void AppendEvent(const std::string& message);
 SharedStateSnapshot GetSharedStateSnapshot();
+void StartTimedCapture(const TimedCaptureRequest& request);
+void StopTimedCapture();
+TimedCaptureState GetTimedCaptureState();
+bool ShouldTriggerTimedCapture(int64_t currentTimeMs);
+void RecordTimedCaptureComplete();
+void SetTimedCaptureStatus(const std::string& status, const std::string& path = std::string());
 void ResetForTests();
 std::string MakeUtcTimestamp();
 

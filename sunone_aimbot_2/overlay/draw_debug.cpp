@@ -4,8 +4,13 @@
 #include <Windows.h>
 
 #include <d3d11.h>
+#include <algorithm>
+#include <cstdio>
+#include <limits>
+#include <optional>
 #include <string>
 #include <vector>
+#include <thread>
 
 #include "imgui/imgui.h"
 #include "sunone_aimbot_2.h"
@@ -13,6 +18,7 @@
 #include "overlay/config_dirty.h"
 #include "include/other_tools.h"
 #include "capture.h"
+#include "sunone_aimbot_2/debug/detection_debug_export.h"
 #include "overlay/ui_sections.h"
 
 #ifdef USE_CUDA
@@ -41,6 +47,68 @@ static ID3D11ShaderResourceView* g_maskSRV = nullptr;
 static int maskTexW = 0, maskTexH = 0;
 
 static float debug_scale = 0.5f;
+static int g_timedCaptureIntervalMs = 250;
+static int g_timedCaptureBurstCount = 5;
+static char g_timedCapturePrefix[64] = "";
+static std::string g_lastDebugStatus = "No debug export yet.";
+static std::string g_lastDebugPath;
+static std::string g_lastDebugBundleId;
+static std::string g_lastDebugBackend;
+static int g_lastDebugDetectionCount = 0;
+
+static std::string joinShape(const std::vector<int64_t>& shape)
+{
+    if (shape.empty())
+        return "[]";
+
+    std::string text = "[";
+    for (size_t i = 0; i < shape.size(); ++i)
+    {
+        if (i > 0)
+            text += ", ";
+        text += std::to_string(shape[i]);
+    }
+    text += "]";
+    return text;
+}
+
+static std::string formatOptionalInt(const std::optional<int>& value)
+{
+    return value.has_value() ? std::to_string(*value) : std::string("n/a");
+}
+
+static std::string formatOptionalFloat(const std::optional<float>& value)
+{
+    if (!value.has_value())
+        return "n/a";
+
+    char buffer[32] = {};
+    snprintf(buffer, sizeof(buffer), "%.4f", *value);
+    return buffer;
+}
+
+static void runDebugExport(detection_debug::ExportKind kind)
+{
+    std::thread([kind]() {
+        const auto snapshot = detection_debug::CaptureBundleSnapshot("[ManualExport] requested export");
+        std::string outPath;
+        std::string outStatus;
+        const bool success = detection_debug::QueueBundleExport(snapshot, &outPath, &outStatus, kind);
+
+        g_lastDebugStatus = outStatus.empty()
+            ? (success ? "Debug export complete" : "Debug export failed")
+            : outStatus;
+        g_lastDebugPath = outPath;
+        g_lastDebugBundleId = snapshot.bundleId;
+        g_lastDebugBackend = snapshot.backend;
+        g_lastDebugDetectionCount = static_cast<int>(snapshot.boxes.size());
+
+        detection_debug::AppendEvent(
+            success
+                ? std::string("[ManualExport] ") + g_lastDebugStatus + " -> " + outPath
+                : std::string("[ManualExport] failed: ") + g_lastDebugStatus);
+    }).detach();
+}
 
 static int findDebugKeyIndexByName(const std::string& keyName)
 {
@@ -362,5 +430,133 @@ void draw_debug()
         prev_screenshot_delay = config.screenshot_delay;
         prev_verbose = config.verbose;
         OverlayConfig_MarkDirty();
+    }
+
+    if (OverlayUI::BeginSection("Detection Diagnostics", "debug_section_detection_diagnostics"))
+    {
+        int liveFrameW = 0;
+        int liveFrameH = 0;
+        int liveDetectionCount = 0;
+        int minBoxX = std::numeric_limits<int>::max();
+        int minBoxY = std::numeric_limits<int>::max();
+        int maxBoxX = std::numeric_limits<int>::min();
+        int maxBoxY = std::numeric_limits<int>::min();
+
+        {
+            std::lock_guard<std::mutex> lk(frameMutex);
+            if (!latestFrame.empty())
+            {
+                liveFrameW = latestFrame.cols;
+                liveFrameH = latestFrame.rows;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
+            liveDetectionCount = static_cast<int>(detectionBuffer.boxes.size());
+            for (const auto& box : detectionBuffer.boxes)
+            {
+                minBoxX = std::min(minBoxX, box.x);
+                minBoxY = std::min(minBoxY, box.y);
+                maxBoxX = std::max(maxBoxX, box.x + box.width);
+                maxBoxY = std::max(maxBoxY, box.y + box.height);
+            }
+        }
+
+        const auto sharedSnapshot = detection_debug::GetSharedStateSnapshot();
+        const auto timedCaptureState = detection_debug::GetTimedCaptureState();
+
+        if (ImGui::Button("Save Raw Frame"))
+            runDebugExport(detection_debug::ExportKind::RawFrame);
+        ImGui::SameLine();
+        if (ImGui::Button("Save Annotated Frame"))
+            runDebugExport(detection_debug::ExportKind::AnnotatedFrame);
+        ImGui::SameLine();
+        if (ImGui::Button("Save Debug Bundle"))
+            runDebugExport(detection_debug::ExportKind::Bundle);
+        ImGui::SameLine();
+        if (ImGui::Button("Export Debug Log"))
+            runDebugExport(detection_debug::ExportKind::LogOnly);
+
+        ImGui::Separator();
+        ImGui::Text("Timed Capture");
+        ImGui::InputInt("Interval (ms)", &g_timedCaptureIntervalMs, 50, 500);
+        ImGui::InputInt("Burst count", &g_timedCaptureBurstCount, 1, 10);
+        ImGui::InputText("Prefix", g_timedCapturePrefix, IM_ARRAYSIZE(g_timedCapturePrefix));
+        g_timedCaptureIntervalMs = std::max(1, g_timedCaptureIntervalMs);
+        g_timedCaptureBurstCount = std::max(1, g_timedCaptureBurstCount);
+
+        if (ImGui::Button("Start Timed Capture"))
+        {
+            detection_debug::TimedCaptureRequest request;
+            request.intervalMs = g_timedCaptureIntervalMs;
+            request.remainingShots = g_timedCaptureBurstCount;
+            request.prefix = g_timedCapturePrefix;
+            detection_debug::StartTimedCapture(request);
+            detection_debug::AppendEvent(
+                std::string("[TimedCapture] started interval=") + std::to_string(request.intervalMs) +
+                "ms burst=" + std::to_string(request.remainingShots));
+            g_lastDebugStatus = "Timed capture started";
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Stop Timed Capture"))
+        {
+            detection_debug::StopTimedCapture();
+            detection_debug::SetTimedCaptureStatus("Timed capture stopped");
+            detection_debug::AppendEvent("[TimedCapture] stopped");
+            g_lastDebugStatus = "Timed capture stopped";
+        }
+
+        ImGui::Text(
+            "State: %s | Remaining: %d | Completed: %d",
+            timedCaptureState.active ? "running" : "idle",
+            timedCaptureState.remainingShots,
+            timedCaptureState.completedShots);
+        ImGui::TextWrapped("Timed status: %s", timedCaptureState.lastStatus.empty() ? "n/a" : timedCaptureState.lastStatus.c_str());
+        ImGui::TextWrapped("Timed path: %s", timedCaptureState.lastPath.empty() ? "n/a" : timedCaptureState.lastPath.c_str());
+
+        ImGui::Separator();
+        ImGui::Text("Live");
+        ImGui::Text("Backend: %s", sharedSnapshot.detector.backend.empty() ? config.backend.c_str() : sharedSnapshot.detector.backend.c_str());
+        ImGui::TextWrapped("Model: %s", sharedSnapshot.detector.modelPath.empty() ? config.ai_model.c_str() : sharedSnapshot.detector.modelPath.c_str());
+        if (liveFrameW > 0 && liveFrameH > 0)
+            ImGui::Text("Frame: %dx%d", liveFrameW, liveFrameH);
+        else
+            ImGui::TextDisabled("Frame: n/a");
+        ImGui::Text("Detection resolution: %d", config.detection_resolution);
+        ImGui::Text(
+            "Detector input: %s x %s",
+            formatOptionalInt(sharedSnapshot.detector.detectorInputWidth).c_str(),
+            formatOptionalInt(sharedSnapshot.detector.detectorInputHeight).c_str());
+        ImGui::Text(
+            "Model size: %s x %s",
+            formatOptionalInt(sharedSnapshot.detector.modelWidth).c_str(),
+            formatOptionalInt(sharedSnapshot.detector.modelHeight).c_str());
+        ImGui::TextWrapped("Output shape: %s", joinShape(sharedSnapshot.detector.outputShape).c_str());
+        ImGui::Text(
+            "Gains: x=%s y=%s",
+            formatOptionalFloat(sharedSnapshot.detector.xGain).c_str(),
+            formatOptionalFloat(sharedSnapshot.detector.yGain).c_str());
+        ImGui::TextWrapped(
+            "Box convention: %s",
+            sharedSnapshot.detector.boxConvention.empty() ? "n/a" : sharedSnapshot.detector.boxConvention.c_str());
+        ImGui::Text(
+            "Detections: live=%d detector=%d",
+            liveDetectionCount,
+            static_cast<int>(sharedSnapshot.detector.detections.size()));
+        if (liveDetectionCount > 0)
+            ImGui::Text("Box extents: min(%d,%d) max(%d,%d)", minBoxX, minBoxY, maxBoxX, maxBoxY);
+        else
+            ImGui::TextDisabled("Box extents: n/a");
+
+        ImGui::Separator();
+        ImGui::Text("Last Saved");
+        ImGui::TextWrapped("Status: %s", g_lastDebugStatus.c_str());
+        ImGui::TextWrapped("Path: %s", g_lastDebugPath.empty() ? "n/a" : g_lastDebugPath.c_str());
+        ImGui::TextWrapped("Bundle ID: %s", g_lastDebugBundleId.empty() ? "n/a" : g_lastDebugBundleId.c_str());
+        ImGui::TextWrapped("Backend: %s", g_lastDebugBackend.empty() ? "n/a" : g_lastDebugBackend.c_str());
+        ImGui::Text("Detection count: %d", g_lastDebugDetectionCount);
+
+        OverlayUI::EndSection();
     }
 }

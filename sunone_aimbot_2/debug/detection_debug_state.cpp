@@ -1,4 +1,5 @@
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
+#include <algorithm>
 #include <deque>
 #include <mutex>
 #include <chrono>
@@ -41,6 +42,9 @@ namespace {
 std::mutex g_debugMutex;
 DetectorSnapshot g_lastDetectorSnapshot;
 std::deque<std::string> g_eventLog;
+TimedCaptureState g_timedCaptureState;
+int64_t g_nextTimedCaptureAtMs = 0;
+bool g_timedCaptureInFlight = false;
 } // namespace
 
 void PublishDetectorSnapshot(const DetectorSnapshot& snapshot) {
@@ -64,10 +68,83 @@ SharedStateSnapshot GetSharedStateSnapshot() {
     return snapshot;
 }
 
+void StartTimedCapture(const TimedCaptureRequest& request) {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    g_timedCaptureState.active = request.remainingShots > 0;
+    g_timedCaptureState.intervalMs = std::max(1, request.intervalMs);
+    g_timedCaptureState.remainingShots = std::max(0, request.remainingShots);
+    g_timedCaptureState.completedShots = 0;
+    g_timedCaptureState.prefix = request.prefix;
+    g_timedCaptureState.lastStatus = g_timedCaptureState.active ? "Timed capture running" : "Timed capture idle";
+    g_timedCaptureState.lastPath.clear();
+    g_nextTimedCaptureAtMs = 0;
+    g_timedCaptureInFlight = false;
+}
+
+void StopTimedCapture() {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    g_timedCaptureState.active = false;
+    g_timedCaptureState.remainingShots = 0;
+    g_timedCaptureInFlight = false;
+    if (g_timedCaptureState.lastStatus.empty()) {
+        g_timedCaptureState.lastStatus = "Timed capture stopped";
+    }
+}
+
+TimedCaptureState GetTimedCaptureState() {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    return g_timedCaptureState;
+}
+
+bool ShouldTriggerTimedCapture(int64_t currentTimeMs) {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    if (!g_timedCaptureState.active || g_timedCaptureState.remainingShots <= 0 || g_timedCaptureInFlight) {
+        return false;
+    }
+
+    if (g_nextTimedCaptureAtMs == 0 || currentTimeMs >= g_nextTimedCaptureAtMs) {
+        g_timedCaptureInFlight = true;
+        g_nextTimedCaptureAtMs = currentTimeMs + g_timedCaptureState.intervalMs;
+        return true;
+    }
+
+    return false;
+}
+
+void RecordTimedCaptureComplete() {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    if (!g_timedCaptureInFlight) {
+        return;
+    }
+
+    g_timedCaptureInFlight = false;
+    if (g_timedCaptureState.remainingShots > 0) {
+        --g_timedCaptureState.remainingShots;
+        ++g_timedCaptureState.completedShots;
+    }
+    if (g_timedCaptureState.remainingShots <= 0) {
+        g_timedCaptureState.active = false;
+        if (g_timedCaptureState.lastStatus.empty() || g_timedCaptureState.lastStatus == "Timed capture running") {
+            g_timedCaptureState.lastStatus = "Timed capture completed";
+        }
+    }
+}
+
+void SetTimedCaptureStatus(const std::string& status, const std::string& path) {
+    std::lock_guard<std::mutex> lock(g_debugMutex);
+    g_timedCaptureState.lastStatus = status;
+    if (!path.empty()) {
+        g_timedCaptureState.lastPath = path;
+    }
+}
+
 void ResetForTests() {
     std::lock_guard<std::mutex> lock(g_debugMutex);
     g_lastDetectorSnapshot = DetectorSnapshot{};
     g_eventLog.clear();
+    g_timedCaptureState = TimedCaptureState{};
+    g_nextTimedCaptureAtMs = 0;
+    g_timedCaptureInFlight = false;
 }
 
 } // namespace detection_debug

@@ -2,11 +2,19 @@
 
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
 #include <opencv2/opencv.hpp>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace detection_debug {
+
+enum class ExportKind {
+    RawFrame,
+    AnnotatedFrame,
+    Bundle,
+    LogOnly,
+};
 
 struct BundleSnapshot {
     std::string exportTimestampUtc;
@@ -24,8 +32,15 @@ struct BundleSnapshot {
 };
 
 BundleSnapshot CaptureBundleSnapshot();
-bool QueueBundleExport(const BundleSnapshot& snapshot, std::string* outPath, std::string* outStatus);
+BundleSnapshot CaptureBundleSnapshot(std::optional<std::string> pendingEvent);
+bool QueueBundleExport(
+    const BundleSnapshot& snapshot,
+    std::string* outPath,
+    std::string* outStatus,
+    ExportKind kind = ExportKind::Bundle);
 std::string BuildBundleJson(const BundleSnapshot& snapshot);
+std::string FormatDetectionLabel(const DetectionDebugEntry& entry, const std::string& boxConvention);
 std::string MakeBundleIdForTests(const std::string& utcTimestamp);
+std::filesystem::path GetDebugOutputRootForTests(const std::filesystem::path& executablePath);
 
 } // namespace detection_debug

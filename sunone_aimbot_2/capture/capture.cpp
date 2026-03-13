@@ -35,6 +35,8 @@
 #include "virtual_camera.h"
 #include "udp_capture.h"
 #include "capture_utils.h"
+#include "sunone_aimbot_2/debug/detection_debug_export.h"
+#include "sunone_aimbot_2/debug/detection_debug_state.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -827,6 +829,25 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 frameQueue.push_back(latestFrame);
             }
             frameCV.notify_one();
+
+            const auto timedNowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (detection_debug::ShouldTriggerTimedCapture(timedNowMs))
+            {
+                const auto timedSnapshot = detection_debug::CaptureBundleSnapshot("[TimedCapture] requested bundle export");
+                std::string timedOutPath;
+                std::string timedOutStatus;
+                const bool timedSuccess = detection_debug::QueueBundleExport(
+                    timedSnapshot, &timedOutPath, &timedOutStatus);
+                detection_debug::RecordTimedCaptureComplete();
+                detection_debug::SetTimedCaptureStatus(timedOutStatus, timedOutPath);
+                detection_debug::AppendEvent(
+                    timedSuccess
+                        ? std::string("[TimedCapture] saved: ") + timedOutPath
+                        : std::string("[TimedCapture] failed: ") + timedOutStatus);
+                if (!timedSuccess)
+                    detection_debug::StopTimedCapture();
+            }
 
             if (screenshotRequested)
             {

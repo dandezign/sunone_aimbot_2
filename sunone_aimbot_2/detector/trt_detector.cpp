@@ -26,6 +26,7 @@
 #include "cuda_preprocess.h"
 #include "depth/depth_mask.h"
 #include "capture.h"
+#include "detector/yolo26_decode.h"
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
 
 extern std::atomic<bool> detectionPaused;
@@ -80,76 +81,16 @@ std::vector<Detection> decodeYolo26Outputs(
     int numClasses,
     float confThreshold,
     float x_gain,  // Scale from model X to game X
-    float y_gain   // Scale from model Y to game Y
+    float y_gain,  // Scale from model Y to game Y
+    std::vector<detection_debug::RawBoxDebug>* rawBoxes = nullptr
 )
 {
-    std::vector<Detection> detections;
-    
-    // Validate input pointer
-    if (!output) {
-        return detections;  // Return empty vector on null input
-    }
-    
-    // Validate output shape: expect (N, 300, 6) or flat (1800,)
-    const int64_t expectedSize = 300 * 6;
-    const int64_t actualSize = shape.empty() ? 1800 : 
-                               (shape.size() == 1 ? shape[0] : 
-                                shape[1] * shape[2]);
-    
-    if (actualSize != expectedSize) {
-        std::cerr << "[YOLO26] Warning: unexpected output shape " 
-                  << "(expected " << expectedSize << ", got " << actualSize << ")" << std::endl;
-        return detections;  // Return empty on shape mismatch
-    }
-    
-    // YOLO26 output: (N, 300, 6)
-    // Format: [x, y, w, h, conf, class_id] in MODEL SPACE (640x640)
-    
-    for (int i = 0; i < 300; i++) {
-        float conf = output[i * 6 + 4];
-        
-        // Skip low-confidence detections
-        if (conf < confThreshold || std::isnan(conf) || std::isinf(conf)) {
-            continue;
-        }
-        
-        // Coordinates in model space (640x640)
-        float model_x = output[i * 6 + 0];
-        float model_y = output[i * 6 + 1];
-        float model_w = output[i * 6 + 2];
-        float model_h = output[i * 6 + 3];
-        float classIdFloat = output[i * 6 + 5];
-        
-        // Validate coordinates (reject NaN/inf/negative)
-        if (std::isnan(model_x) || std::isnan(model_y) || std::isnan(model_w) || std::isnan(model_h) ||
-            std::isinf(model_x) || std::isinf(model_y) || std::isinf(model_w) || std::isinf(model_h) ||
-            model_x < 0 || model_y < 0 || model_w <= 0 || model_h <= 0) {
-            continue;
-        }
-        
-        // Validate classId bounds
-        int classId = static_cast<int>(classIdFloat);
-        if (classId < 0 || classId >= numClasses) {
-            continue;  // Skip invalid class IDs
-        }
-        
-        // SCALE FROM MODEL SPACE TO GAME SPACE
-        const int game_x = static_cast<int>(model_x * x_gain);
-        const int game_y = static_cast<int>(model_y * y_gain);
-        const int game_w = static_cast<int>(model_w * x_gain);
-        const int game_h = static_cast<int>(model_h * y_gain);
-        
-        detections.push_back({
-            cv::Rect(game_x, game_y, game_w, game_h),
-            conf,
-            classId
-        });
-    }
-    
-    return detections;
+    return yolo26::DecodeOutputs(output, shape, numClasses, confThreshold, x_gain, y_gain, rawBoxes);
 }
 
-void filterDetectionsByDepthMask(std::vector<Detection>& detections)
+void filterDetectionsByDepthMask(
+    std::vector<Detection>& detections,
+    std::vector<detection_debug::RawBoxDebug>* rawBoxes = nullptr)
 {
     static cv::Mat holdTtl;
 
@@ -198,10 +139,31 @@ void filterDetectionsByDepthMask(std::vector<Detection>& detections)
     if (suppressionMask.empty() || suppressionMask.type() != CV_8UC1)
         return;
 
-    detections.erase(
-        std::remove_if(detections.begin(), detections.end(),
-            [&suppressionMask](const Detection& det) { return intersectsDepthMask(det.box, suppressionMask); }),
-        detections.end());
+    if (!rawBoxes || rawBoxes->size() != detections.size())
+    {
+        detections.erase(
+            std::remove_if(detections.begin(), detections.end(),
+                [&suppressionMask](const Detection& det) { return intersectsDepthMask(det.box, suppressionMask); }),
+            detections.end());
+        return;
+    }
+
+    std::vector<Detection> filteredDetections;
+    std::vector<detection_debug::RawBoxDebug> filteredRawBoxes;
+    filteredDetections.reserve(detections.size());
+    filteredRawBoxes.reserve(rawBoxes->size());
+
+    for (size_t i = 0; i < detections.size(); ++i)
+    {
+        if (intersectsDepthMask(detections[i].box, suppressionMask))
+            continue;
+
+        filteredDetections.push_back(detections[i]);
+        filteredRawBoxes.push_back((*rawBoxes)[i]);
+    }
+
+    detections = std::move(filteredDetections);
+    *rawBoxes = std::move(filteredRawBoxes);
 }
 } // namespace
 
@@ -996,15 +958,17 @@ void TrtDetector::decodeOutputs(const float* output, const std::string& outputNa
     const float x_gain = static_cast<float>(gameWidth) / modelSize;
     const float y_gain = static_cast<float>(gameHeight) / modelSize;
     
+    std::vector<detection_debug::RawBoxDebug> rawBoxes;
     detections = decodeYolo26Outputs(
         output,
         shapeIt->second,
         numClasses,
         config.confidence_threshold,
         x_gain,
-        y_gain
+        y_gain,
+        &rawBoxes
     );
-    filterDetectionsByDepthMask(detections);
+    filterDetectionsByDepthMask(detections, &rawBoxes);
 
     // Publish debug snapshot after YOLO26 decode
     detection_debug::DetectorSnapshot debugSnapshot;
@@ -1018,48 +982,16 @@ void TrtDetector::decodeOutputs(const float* output, const std::string& outputNa
     debugSnapshot.outputShape = shapeIt->second;
     debugSnapshot.xGain = x_gain;
     debugSnapshot.yGain = y_gain;
-    debugSnapshot.boxConvention = "top_left_wh";
+    debugSnapshot.boxConvention = "xyxy";
     
-    // Reconstruct raw model-space boxes from the output pointer
-    const int64_t rows = shapeIt->second.size() >= 2 ? shapeIt->second[1] : 300;
-    for (int64_t i = 0; i < rows; i++) {
-        const float* detPtr = output + (i * 6);
-        float conf = detPtr[4];
-        
-        if (conf < config.confidence_threshold || std::isnan(conf) || std::isinf(conf)) {
-            continue;
-        }
-        
-        float model_x = detPtr[0];
-        float model_y = detPtr[1];
-        float model_w = detPtr[2];
-        float model_h = detPtr[3];
-        
-        if (std::isnan(model_x) || std::isnan(model_y) || std::isnan(model_w) || std::isnan(model_h) ||
-            std::isinf(model_x) || std::isinf(model_y) || std::isinf(model_w) || std::isinf(model_h) ||
-            model_x < 0 || model_y < 0 || model_w <= 0 || model_h <= 0) {
-            continue;
-        }
-        
-        float classIdFloat = detPtr[5];
-        int classId = static_cast<int>(classIdFloat);
-        if (classId < 0 || classId >= numClasses) {
-            continue;
-        }
-        
-        detection_debug::RawBoxDebug rawBox;
-        rawBox.x = model_x;
-        rawBox.y = model_y;
-        rawBox.w = model_w;
-        rawBox.h = model_h;
-        
-        const Detection& det = detections[static_cast<size_t>(debugSnapshot.detections.size())];
+    for (size_t i = 0; i < detections.size() && i < rawBoxes.size(); ++i) {
+        const Detection& det = detections[i];
         debugSnapshot.detections.push_back(
             detection_debug::MakeDetectionDebugEntry(
-                static_cast<int>(debugSnapshot.detections.size()),
+                static_cast<int>(i),
                 det.classId,
-                conf,
-                rawBox,
+                det.confidence,
+                rawBoxes[i],
                 det.box));
     }
     

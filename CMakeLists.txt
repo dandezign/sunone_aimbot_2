@@ -143,6 +143,7 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/depth/depth_utils.cpp"
     "${SRC_DIR}/detector/detection_buffer.cpp"
     "${SRC_DIR}/detector/dml_detector.cpp"
+    "${SRC_DIR}/detector/yolo26_decode.cpp"
     "${SRC_DIR}/imgui/imgui.cpp"
     "${SRC_DIR}/imgui/imgui_draw.cpp"
     "${SRC_DIR}/imgui/imgui_impl_dx11.cpp"
@@ -407,6 +408,7 @@ message(STATUS "C++/WinRT include: ${AIMBOT_CPPWINRT_INCLUDE_DIR}")
 
 add_executable(detection_debug_tools_tests
     "${CMAKE_SOURCE_DIR}/tests/detection_debug_tools_test.cpp"
+    "${SRC_DIR}/detector/yolo26_decode.cpp"
     "${SRC_DIR}/debug/detection_debug_state.cpp"
     "${SRC_DIR}/debug/detection_debug_export.cpp"
 )
