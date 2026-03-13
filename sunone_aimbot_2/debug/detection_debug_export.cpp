@@ -21,32 +21,6 @@ extern Config config;
 
 namespace detection_debug {
 
-static std::string MakeUtcTimestamp() {
-    const auto now = std::chrono::system_clock::now();
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()) % 1000;
-    const auto time = std::chrono::system_clock::to_time_t(now);
-    std::tm tm_buf{};
-    gmtime_s(&tm_buf, &time);
-    std::ostringstream oss;
-    oss << std::put_time(&tm_buf, "%Y-%m-%dT%H:%M:%S");
-    oss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-    return oss.str();
-}
-
-std::string MakeBundleIdForTests(const std::string& utcTimestamp) {
-    std::string id = utcTimestamp;
-    for (char& c : id) {
-        if (c == 'T') c = '_';
-        else if (c == ':') c = '-';
-        else if (c == '.') c = '-';
-        else if (c == 'Z') c = '\0';
-    }
-    id.resize(id.size() - 1);
-    id += "_yolo26_debug";
-    return id;
-}
-
 static std::string EscapeJson(const std::string& s) {
     std::string result;
     result.reserve(s.size() + 16);
@@ -70,6 +44,19 @@ static std::string EscapeJson(const std::string& s) {
         }
     }
     return result;
+}
+
+std::string MakeBundleIdForTests(const std::string& utcTimestamp) {
+    std::string id = utcTimestamp;
+    for (char& c : id) {
+        if (c == 'T') c = '_';
+        else if (c == ':') c = '-';
+        else if (c == '.') c = '-';
+        else if (c == 'Z') c = '\0';
+    }
+    id.resize(id.size() - 1);
+    id += "_yolo26_debug";
+    return id;
 }
 
 static std::string SerializeDetectorJson(const DetectorSnapshot& det) {

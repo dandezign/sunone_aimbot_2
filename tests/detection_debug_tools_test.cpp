@@ -2,6 +2,7 @@
 #include "sunone_aimbot_2/debug/detection_debug_export.h"
 #include <cassert>
 #include <string>
+#include <opencv2/opencv.hpp>
 
 int main() {
     detection_debug::ResetForTests();
@@ -42,6 +43,15 @@ int main() {
     const std::string json = detection_debug::BuildBundleJson(nullTestSnapshot);
     assert(json.find("\"output_shape\":[]") != std::string::npos);
     assert(json.find("\"x_gain\":null") != std::string::npos);
+
+    // Test MakeDetectionDebugEntry preserves raw and final box data
+    {
+        const cv::Rect finalBox(110, 90, 32, 64);
+        const auto entry = detection_debug::MakeDetectionDebugEntry(0, 1, 0.91f, {220.0f, 180.0f, 64.0f, 128.0f}, finalBox);
+        assert(entry.classId == 1);
+        assert(entry.rawBox.x == 220.0f);
+        assert(entry.finalBox.w == 32);
+    }
 
     return 0;
 }

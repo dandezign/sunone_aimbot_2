@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include <opencv2/opencv.hpp>
+
 namespace detection_debug {
 
 inline constexpr size_t kMaxDebugEvents = 256;
@@ -31,6 +33,13 @@ struct DetectionDebugEntry {
     FinalBoxDebug finalBox;
 };
 
+DetectionDebugEntry MakeDetectionDebugEntry(
+    int index,
+    int classId,
+    float confidence,
+    const RawBoxDebug& rawBox,
+    const cv::Rect& finalBox);
+
 struct DetectorSnapshot {
     std::string backend;
     std::string modelPath;
@@ -55,5 +64,6 @@ void PublishDetectorSnapshot(const DetectorSnapshot& snapshot);
 void AppendEvent(const std::string& message);
 SharedStateSnapshot GetSharedStateSnapshot();
 void ResetForTests();
+std::string MakeUtcTimestamp();
 
 } // namespace detection_debug

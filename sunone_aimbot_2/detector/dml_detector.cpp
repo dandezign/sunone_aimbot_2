@@ -17,6 +17,7 @@
 // postProcess.h removed - YOLO26 doesn't use NMS
 #include "capture.h"
 #include "other_tools.h"
+#include "sunone_aimbot_2/debug/detection_debug_state.h"
 #ifdef USE_CUDA
 #include "depth/depth_mask.h"
 #endif
@@ -403,9 +404,59 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         const float x_gain = static_cast<float>(gameWidth) / 640.0f;
         const float y_gain = static_cast<float>(gameHeight) / 640.0f;
         
+        // Decode and get raw model-space boxes
         detections = decodeYolo26Outputs(ptr, shp, num_classes, conf_thr, x_gain, y_gain);
         
-        // No additional scaling needed - already scaled in decoder
+        // Publish debug snapshot with raw and final box data
+        detection_debug::DetectorSnapshot debugSnapshot;
+        debugSnapshot.backend = "DML";
+        debugSnapshot.modelPath = "models/" + config.ai_model;
+        debugSnapshot.detectorTimestampUtc = detection_debug::MakeUtcTimestamp();
+        debugSnapshot.detectorInputWidth = target_w;
+        debugSnapshot.detectorInputHeight = target_h;
+        debugSnapshot.modelWidth = 640;
+        debugSnapshot.modelHeight = 640;
+        debugSnapshot.outputShape = outShape;
+        debugSnapshot.xGain = x_gain;
+        debugSnapshot.yGain = y_gain;
+        debugSnapshot.boxConvention = "top_left_wh";
+        
+        int outputIndex = 0;
+        for (const auto& det : detections) {
+            // Reconstruct raw model-space box from the pointer
+            const float* detPtr = ptr + (outputIndex * 6);
+            float model_x = detPtr[0];
+            float model_y = detPtr[1];
+            float model_w = detPtr[2];
+            float model_h = detPtr[3];
+            float conf = detPtr[4];
+            float classIdFloat = detPtr[5];
+            
+            detection_debug::RawBoxDebug rawBox;
+            rawBox.x = model_x;
+            rawBox.y = model_y;
+            rawBox.w = model_w;
+            rawBox.h = model_h;
+            
+            debugSnapshot.detections.push_back(
+                detection_debug::MakeDetectionDebugEntry(
+                    static_cast<int>(debugSnapshot.detections.size()),
+                    det.classId,
+                    conf,
+                    rawBox,
+                    det.box));
+            outputIndex++;
+        }
+        
+        detection_debug::PublishDetectorSnapshot(debugSnapshot);
+        
+        // Append debug events for DML path
+        static bool s_firstRun = true;
+        if (s_firstRun) {
+            detection_debug::AppendEvent("[DML] output shape = [1," + std::to_string(rows) + "," + std::to_string(cols) + "]");
+            detection_debug::AppendEvent("[DML] detector input = " + std::to_string(target_w) + "x" + std::to_string(target_h));
+            s_firstRun = false;
+        }
 
         batchDetections[b] = std::move(detections);
     }
