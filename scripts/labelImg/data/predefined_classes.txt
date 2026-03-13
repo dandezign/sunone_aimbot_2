@@ -1,0 +1,4 @@
+body
+head
+enemy
+friendly
