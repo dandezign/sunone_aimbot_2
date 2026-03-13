@@ -37,6 +37,8 @@
 #include "capture_utils.h"
 #include "sunone_aimbot_2/debug/detection_debug_export.h"
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
+#include "sunone_aimbot_2/training/training_label_runtime.h"
+#include "sunone_aimbot_2/training/training_dataset_manager.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -100,6 +102,15 @@ struct CaptureThreadConfig
     int screenshot_delay = 0;
     bool show_window = false;
     bool verbose = false;
+
+    // Training label
+    bool training_label_enabled = false;
+    std::vector<std::string> training_label_hotkey;
+    std::string training_label_prompt;
+    std::string training_label_class;
+    std::string training_label_split;
+    bool training_label_save_negatives = false;
+    std::string training_label_image_format;
 #ifdef USE_CUDA
     bool depth_inference_enabled = false;
     bool depth_mask_enabled = false;
@@ -135,6 +146,16 @@ CaptureThreadConfig SnapshotCaptureConfig()
     snapshot.screenshot_delay = config.screenshot_delay;
     snapshot.show_window = config.show_window;
     snapshot.verbose = config.verbose;
+
+    // Training label
+    snapshot.training_label_enabled = config.training_label_enabled;
+    snapshot.training_label_hotkey = config.training_label_hotkey;
+    snapshot.training_label_prompt = config.training_label_prompt;
+    snapshot.training_label_class = config.training_label_class;
+    snapshot.training_label_split = config.training_label_split;
+    snapshot.training_label_save_negatives = config.training_label_save_negatives;
+    snapshot.training_label_image_format = config.training_label_image_format;
+
 #ifdef USE_CUDA
     snapshot.depth_inference_enabled = config.depth_inference_enabled;
     snapshot.depth_mask_enabled = config.depth_mask_enabled;
@@ -861,6 +882,56 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     screenshotWriter.Enqueue(filename, std::move(saveMat));
                     lastSaveTime = screenshotNow;
                 }
+            }
+
+            // Training label hotkey detection
+            static std::chrono::steady_clock::time_point lastTrainingLabelTime;
+            const bool trainingLabelEnabled = currentCfg.training_label_enabled;
+            const bool trainingHotkeySet = !currentCfg.training_label_hotkey.empty() && 
+                                           currentCfg.training_label_hotkey[0] != "None";
+            const auto trainingLabelNow = std::chrono::steady_clock::now();
+            const auto trainingLabelElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                trainingLabelNow - lastTrainingLabelTime
+            ).count();
+            const bool trainingHotkeyPressed =
+                trainingLabelEnabled &&
+                trainingHotkeySet &&
+                isAnyKeyPressed(currentCfg.training_label_hotkey) &&
+                trainingLabelElapsedMs >= 500;  // 500ms debounce
+
+            if (trainingHotkeyPressed && !screenshotCpu.empty())
+            {
+                training::QueuedSaveRequest request;
+                request.frame = screenshotCpu.clone();
+                request.prompt = currentCfg.training_label_prompt;
+                request.className = currentCfg.training_label_class;
+                request.split = (currentCfg.training_label_split == "val") ? 
+                                training::DatasetSplit::Val : 
+                                training::DatasetSplit::Train;
+                request.saveNegatives = currentCfg.training_label_save_negatives;
+                request.imageFormat = currentCfg.training_label_image_format;
+
+                const auto exePath = std::filesystem::current_path() / "ai.exe";
+                const auto trainingRoot = training::DatasetManager::GetTrainingRootForExe(exePath);
+                training::DatasetManager mgr(trainingRoot);
+                mgr.EnsureLayout();
+                
+                // Load or create class catalog if needed
+                auto classes = mgr.LoadClasses();
+                if (classes.empty() || std::find(classes.begin(), classes.end(), request.className) == classes.end())
+                {
+                    // Add new class if not exists
+                    classes.push_back(request.className);
+                    mgr.SaveClasses(classes);
+                }
+
+                static training::RuntimeManager runtime(mgr);
+                if (!runtime.EnqueueSave(request))
+                {
+                    // Queue full - silently drop (status shown in UI)
+                }
+
+                lastTrainingLabelTime = trainingLabelNow;
             }
 
             captureFrameCount++;

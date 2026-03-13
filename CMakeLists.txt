@@ -183,7 +183,6 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/sunone_aimbot_2.cpp"
     "${SRC_DIR}/training/training_dataset_manager.cpp"
     "${SRC_DIR}/training/training_label_runtime.cpp"
-    "${SRC_DIR}/training/training_sam3_labeler_stub.cpp"
 )
 
 if(AIMBOT_USE_CUDA)
@@ -200,6 +199,10 @@ if(AIMBOT_USE_CUDA)
         "${SRC_DIR}/tensorrt/nvinf.cpp"
         "${SRC_DIR}/detector/cuda_preprocess.cu"
         "${SRC_DIR}/training/training_sam3_labeler_trt.cpp"
+    )
+else()
+    list(APPEND AIMBOT_SOURCES
+        "${SRC_DIR}/training/training_sam3_labeler_stub.cpp"
     )
 endif()
 
