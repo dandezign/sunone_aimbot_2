@@ -136,6 +136,7 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/capture/virtual_camera.cpp"
     "${SRC_DIR}/capture/winrt_capture.cpp"
     "${SRC_DIR}/config/config.cpp"
+    "${SRC_DIR}/debug/detection_debug_state.cpp"
     "${SRC_DIR}/depth/depth_anything_trt.cpp"
     "${SRC_DIR}/depth/depth_mask.cpp"
     "${SRC_DIR}/depth/depth_utils.cpp"
@@ -400,3 +401,32 @@ message(STATUS "OpenCV include: ${AIMBOT_OPENCV_INCLUDE_DIR}")
 message(STATUS "OpenCV lib: ${AIMBOT_OPENCV_LIBRARY}")
 message(STATUS "ONNX Runtime package: ${AIMBOT_ONNXRUNTIME_DIR}")
 message(STATUS "C++/WinRT include: ${AIMBOT_CPPWINRT_INCLUDE_DIR}")
+
+add_executable(detection_debug_tools_tests
+    "${CMAKE_SOURCE_DIR}/tests/detection_debug_tools_test.cpp"
+    "${SRC_DIR}/debug/detection_debug_state.cpp"
+)
+
+target_include_directories(detection_debug_tools_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${SRC_DIR}"
+)
+
+target_compile_definitions(detection_debug_tools_tests PRIVATE
+    UNICODE
+    _UNICODE
+    _CONSOLE
+)
+
+if(MSVC)
+    target_compile_options(detection_debug_tools_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/W3>
+        $<$<COMPILE_LANGUAGE:CXX>:/sdl>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+    )
+
+    set_target_properties(detection_debug_tools_tests PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+endif()
