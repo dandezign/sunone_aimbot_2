@@ -180,6 +180,9 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/overlay/overlay.cpp"
     "${SRC_DIR}/scr/other_tools.cpp"
     "${SRC_DIR}/sunone_aimbot_2.cpp"
+    "${SRC_DIR}/training/training_dataset_manager.cpp"
+    "${SRC_DIR}/training/training_label_runtime.cpp"
+    "${SRC_DIR}/training/training_sam3_labeler_stub.cpp"
 )
 
 if(AIMBOT_USE_CUDA)
@@ -195,6 +198,7 @@ if(AIMBOT_USE_CUDA)
         "${SRC_DIR}/mem/gpu_resource_manager.cpp"
         "${SRC_DIR}/tensorrt/nvinf.cpp"
         "${SRC_DIR}/detector/cuda_preprocess.cu"
+        "${SRC_DIR}/training/training_sam3_labeler_trt.cpp"
     )
 endif()
 
@@ -439,6 +443,47 @@ if(MSVC)
     )
 
     set_target_properties(detection_debug_tools_tests PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+endif()
+
+add_executable(training_labeling_tests
+    "${CMAKE_SOURCE_DIR}/tests/training_labeling_tests.cpp"
+    "${SRC_DIR}/training/training_dataset_manager.cpp"
+    "${SRC_DIR}/training/training_label_runtime.cpp"
+)
+
+if(NOT AIMBOT_USE_CUDA)
+    list(APPEND AIMBOT_SOURCES
+        "${SRC_DIR}/training/training_sam3_labeler_stub.cpp"
+    )
+endif()
+
+target_include_directories(training_labeling_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${SRC_DIR}"
+    "${AIMBOT_OPENCV_INCLUDE_DIR}"
+)
+
+target_compile_definitions(training_labeling_tests PRIVATE
+    UNICODE
+    _UNICODE
+    _CONSOLE
+)
+
+target_link_libraries(training_labeling_tests PRIVATE
+    "${AIMBOT_OPENCV_LIBRARY}"
+)
+
+if(MSVC)
+    target_compile_options(training_labeling_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/W3>
+        $<$<COMPILE_LANGUAGE:CXX>:/sdl>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+    )
+
+    set_target_properties(training_labeling_tests PROPERTIES
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 endif()
