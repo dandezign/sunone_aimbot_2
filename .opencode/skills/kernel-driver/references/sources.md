@@ -1,5 +1,53 @@
 # Kernel Driver Development Research Sources
 
+## EAC-Specific Research
+
+### Complete Technical Analysis
+
+- **EAC Kernel Driver Complete Analysis** (Internal Reference)
+  - File: `references/eac_complete_analysis.md`
+  - Topics: P-256 cryptography, VAD scanning, handle table detection, telemetry system, HWID collection
+  - Base Address: `0xFFFFF807C1E10000` (analyzed build)
+  - Binary Size: ~8 MB
+  - Date: March 2026
+  - Confidence: High (comprehensive reverse engineering)
+
+### Academic Research
+
+- **"If It Looks Like a Rootkit and Deceives Like a Rootkit"** (ACM 2024)
+  - URL: https://dl.acm.org/doi/fullHtml/10.1145/3664476.3670433
+  - Topics: EAC kernel driver hook detection, VAD tree scanning, physical memory analysis
+  - Date: 2024
+  - Confidence: High (peer-reviewed)
+
+### Community Reverse Engineering
+
+- **Hypercall - "Inside anti-cheat: EasyAntiCheat - Part 1"**
+  - URL: https://hypercall.net/posts/EasyAntiCheat-Part1/
+  - Topics: IOCTL codes, driver architecture, kernel callbacks
+  - Date: 2024-2025
+  - Confidence: High (detailed technical analysis)
+
+- **UnknownCheats - "Analysing EasyAntiCheat's Cryptographic Protocol"**
+  - URL: https://www.unknowncheats.me/forum/anti-cheat-bypass/738562-analysing-easyanticheats-cryptographic-protocol.html
+  - Topics: P-256 ECDSA implementation, telemetry signing, challenge-response
+  - Date: 2024
+  - Confidence: Medium-High (community research)
+
+- **Secret.club - "CVEAC-2020: Bypassing EasyAntiCheat integrity checks"**
+  - URL: https://secret.club/2020/04/08/eac_integrity_check_bypass.html
+  - Topics: Integrity check mechanisms, EPT hooking detection
+  - Date: 2020
+  - Confidence: High (historical baseline)
+
+- **GitHub - girther9399-gif/EAC-REVERSED-WRITEUP**
+  - URL: https://github.com/girther9399-gif/EAC-REVERSED-WRITEUP
+  - Topics: Static analysis, function identification, string obfuscation
+  - Date: 2024-2025
+  - Confidence: Medium-High (educational purpose)
+
+---
+
 ## Primary Documentation
 
 ### Microsoft Official
@@ -193,6 +241,23 @@
 
 ## Research Confidence Summary
 
+### EAC-Specific Research
+
+| Component | Confidence | Primary Sources | Validation Status |
+|-----------|-----------|-----------------|-------------------|
+| **P-256 Cryptography** | High | ACM paper, UnknownCheats analysis | ✅ Verified against NIST spec |
+| **VAD Tree Scanning** | High | Multiple independent confirmations | ✅ Consistent across builds |
+| **Handle Table Detection** | High | Microsoft docs, community research | ✅ Well-documented |
+| **Telemetry Structure** | Medium-High | Reverse engineered | ⚠️ Build-specific |
+| **HWID Collection Methods** | High | Driver analysis, spoofer research | ✅ Validated |
+| **Encrypted Function Dispatch** | High | Binary analysis | ⚠️ Constants rotate |
+| **Zstd Compression** | High | Function pattern matching | ✅ Verified |
+| **Thread/Process Callbacks** | High | Microsoft + community | ✅ Standard technique |
+| **String Obfuscation** | Medium | Static analysis | ⚠️ Algorithm may vary |
+| **Detection Gaps** | Medium | Theoretical + limited testing | ⚠️ Requires validation |
+
+### General Kernel Driver Research
+
 | Topic | Confidence Level | Primary Sources |
 |-------|-----------------|-----------------|
 | PTE Hooking | High | Microsoft docs, GitHub POCs |
@@ -202,7 +267,80 @@
 | Anti-Cheat Detection | Medium | Community research, some academic |
 | PatchGuard Bypass | Medium | Limited public information |
 
-## Key Takeaways
+## Key EAC-Specific Takeaways
+
+### Cryptographic Implementation
+
+1. **P-256 is standard NIST secp256r1**
+   - 9-limb 30-bit radix representation
+   - Constant-time Montgomery ladder
+   - 2-bit NAF window method
+   - Used for telemetry signing, not encryption
+
+2. **No Import Table**
+   - All APIs resolved via encrypted function pointer table
+   - Decryption: `(encrypted_ptr * constant_a) ^ constant_b`
+   - ~50+ slots at `0xFFFFF807C2068E78`
+   - Build-specific constants
+
+3. **String Obfuscation**
+   - Rolling XOR cipher with position-dependent key
+   - No plaintext strings in binary
+   - Decoded at runtime only
+
+### Detection Mechanisms
+
+4. **VAD Tree is Primary Internal Detection**
+   - Scans for private + executable + no file backing
+   - RWX regions flagged immediately
+   - Cross-references with PEB module list
+   - **Bypass**: Requires kernel driver to manipulate VAD nodes
+
+5. **Handle Table Walking**
+   - Direct kernel structure access (not NtQuerySystemInformation)
+   - PROCESS_VM_READ/WRITE = immediate flag
+   - Whitelist for legitimate software (NVIDIA, Steam)
+   - **Bypass**: Don't open handles to game process
+
+6. **HWID Collection**
+   - 6+ independent sources (ATA serial, MAC, SMBIOS, etc.)
+   - Cross-source comparison for inconsistency detection
+   - Timing anomaly detection for hook interception
+   - **Bypass**: Firmware-level spoofing or hypervisor interception
+
+7. **Telemetry Pipeline**
+   - 184-byte packet structure
+   - XOR obfuscation (0x90 key)
+   - Zstd compression (60-80% reduction)
+   - P-256 ECDSA signature (64 bytes)
+   - HTTPS to *.easyanticheat.net
+   - **Bypass**: Driver modification or hypervisor EPT hook
+
+### Exploitation Gaps
+
+8. **Critical Vulnerabilities**
+   - DMA attacks (no software footprint)
+   - VAD node DKOM (unlinking injected regions)
+   - Early injection window (before EAC first scan)
+   - Ring3 anti-debug trivially bypassed
+
+9. **High-Value Gaps**
+   - Kernel memory read without handles
+   - SMBIOS hypervisor emulation
+   - Thread pool hijacking
+   - PatchGuard timing window (3-10 minutes)
+
+### Build Considerations
+
+10. **Variability**
+    - Function addresses change per build
+    - Encryption constants rotate
+    - Detection logic evolves weekly
+    - Always verify against current build
+
+---
+
+## Key Takeaways (General)
 
 1. **PTE hooks are stealthier than inline** - Original physical page remains clean for integrity checks
 2. **Physical memory R/W bypasses most monitoring** - CR3 page walking avoids `MmCopyVirtualMemory` hooks
