@@ -26,6 +26,7 @@
 #include "cuda_preprocess.h"
 #include "depth/depth_mask.h"
 #include "capture.h"
+#include "sunone_aimbot_2/debug/detection_debug_state.h"
 
 extern std::atomic<bool> detectionPaused;
 int model_quant;
@@ -1004,6 +1005,96 @@ void TrtDetector::decodeOutputs(const float* output, const std::string& outputNa
         y_gain
     );
     filterDetectionsByDepthMask(detections);
+
+    // Publish debug snapshot after YOLO26 decode
+    detection_debug::DetectorSnapshot debugSnapshot;
+    debugSnapshot.backend = "TRT";
+    debugSnapshot.modelPath = inputName;
+    debugSnapshot.detectorTimestampUtc = detection_debug::MakeUtcTimestamp();
+    debugSnapshot.detectorInputWidth = gameWidth;
+    debugSnapshot.detectorInputHeight = gameHeight;
+    debugSnapshot.modelWidth = modelSize;
+    debugSnapshot.modelHeight = modelSize;
+    debugSnapshot.outputShape = shapeIt->second;
+    debugSnapshot.xGain = x_gain;
+    debugSnapshot.yGain = y_gain;
+    debugSnapshot.boxConvention = "top_left_wh";
+    
+    // Reconstruct raw model-space boxes from the output pointer
+    const int64_t rows = shapeIt->second.size() >= 2 ? shapeIt->second[1] : 300;
+    for (int64_t i = 0; i < rows; i++) {
+        const float* detPtr = output + (i * 6);
+        float conf = detPtr[4];
+        
+        if (conf < config.confidence_threshold || std::isnan(conf) || std::isinf(conf)) {
+            continue;
+        }
+        
+        float model_x = detPtr[0];
+        float model_y = detPtr[1];
+        float model_w = detPtr[2];
+        float model_h = detPtr[3];
+        
+        if (std::isnan(model_x) || std::isnan(model_y) || std::isnan(model_w) || std::isnan(model_h) ||
+            std::isinf(model_x) || std::isinf(model_y) || std::isinf(model_w) || std::isinf(model_h) ||
+            model_x < 0 || model_y < 0 || model_w <= 0 || model_h <= 0) {
+            continue;
+        }
+        
+        float classIdFloat = detPtr[5];
+        int classId = static_cast<int>(classIdFloat);
+        if (classId < 0 || classId >= numClasses) {
+            continue;
+        }
+        
+        detection_debug::RawBoxDebug rawBox;
+        rawBox.x = model_x;
+        rawBox.y = model_y;
+        rawBox.w = model_w;
+        rawBox.h = model_h;
+        
+        const Detection& det = detections[static_cast<size_t>(debugSnapshot.detections.size())];
+        debugSnapshot.detections.push_back(
+            detection_debug::MakeDetectionDebugEntry(
+                static_cast<int>(debugSnapshot.detections.size()),
+                det.classId,
+                conf,
+                rawBox,
+                det.box));
+    }
+    
+    detection_debug::PublishDetectorSnapshot(debugSnapshot);
+    
+    // Append debug events for TRT path (only on first run or when values change)
+    static bool s_firstRun = true;
+    static std::vector<int64_t> s_lastShape;
+    static int s_lastGameWidth = 0;
+    static int s_lastGameHeight = 0;
+    
+    if (s_firstRun) {
+        detection_debug::AppendEvent("[TRT] output shape = [1," + 
+            std::to_string(shapeIt->second.size() >= 2 ? shapeIt->second[1] : 0) + "," +
+            std::to_string(shapeIt->second.size() >= 3 ? shapeIt->second[2] : 0) + "]");
+        detection_debug::AppendEvent("[TRT] detector input = " + std::to_string(gameWidth) + "x" + std::to_string(gameHeight));
+        s_firstRun = false;
+        s_lastShape = shapeIt->second;
+        s_lastGameWidth = gameWidth;
+        s_lastGameHeight = gameHeight;
+    } else {
+        // Log events only when values change
+        if (shapeIt->second != s_lastShape) {
+            detection_debug::AppendEvent("[TRT] output shape changed to [1," + 
+                std::to_string(shapeIt->second.size() >= 2 ? shapeIt->second[1] : 0) + "," +
+                std::to_string(shapeIt->second.size() >= 3 ? shapeIt->second[2] : 0) + "]");
+            s_lastShape = shapeIt->second;
+        }
+        if (gameWidth != s_lastGameWidth || gameHeight != s_lastGameHeight) {
+            detection_debug::AppendEvent("[TRT] detector input changed to " + 
+                std::to_string(gameWidth) + "x" + std::to_string(gameHeight));
+            s_lastGameWidth = gameWidth;
+            s_lastGameHeight = gameHeight;
+        }
+    }
 
     {
         std::lock_guard<std::mutex> lock(detectionBuffer.mutex);

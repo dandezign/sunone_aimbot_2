@@ -232,9 +232,11 @@ if(AIMBOT_USE_CUDA)
 endif()
 
 target_include_directories(ai PRIVATE
+    "${CMAKE_SOURCE_DIR}"
     "${SRC_DIR}"
     "${SRC_DIR}/capture"
     "${SRC_DIR}/config"
+    "${SRC_DIR}/debug"
     "${SRC_DIR}/depth"
     "${SRC_DIR}/detector"
     "${SRC_DIR}/imgui"
