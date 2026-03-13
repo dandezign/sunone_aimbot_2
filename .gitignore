@@ -58,10 +58,14 @@ packages
 /sunone_aimbot_2/modules/TensorRT-10.14.1.48
 docs/downloads
 setup_opencv_dml_run.log
-setup_opencv_dml_run.log
+
 
 # zip files
 *.zip
+
 .worktrees
 .venv
 .idea
+*.engine
+*.onnx
+*.pt
