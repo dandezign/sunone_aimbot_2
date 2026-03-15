@@ -91,9 +91,11 @@ endfunction()
 
 aimbot_pick_latest_dir(_onnxruntime_default "${AIMBOT_PACKAGES_DIR}/Microsoft.ML.OnnxRuntime.DirectML.*")
 aimbot_pick_latest_dir(_directml_default "${AIMBOT_PACKAGES_DIR}/Microsoft.AI.DirectML.*")
+aimbot_pick_latest_dir(_nlohmann_default "${AIMBOT_PACKAGES_DIR}/nlohmann.json.*")
 
 set(AIMBOT_ONNXRUNTIME_DIR "${_onnxruntime_default}" CACHE PATH "Path to Microsoft.ML.OnnxRuntime.DirectML.* package")
 set(AIMBOT_DIRECTML_DIR "${_directml_default}" CACHE PATH "Path to Microsoft.AI.DirectML.* package")
+set(AIMBOT_NLOHMANN_JSON_DIR "${_nlohmann_default}/build/native" CACHE PATH "Path to nlohmann.json.* package (build/native)")
 
 if(AIMBOT_CPPWINRT_INCLUDE_DIR STREQUAL "")
     if(DEFINED CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION AND DEFINED ENV{WindowsSdkDir})
@@ -302,6 +304,7 @@ aimbot_require_file("${AIMBOT_OPENCV_LIBRARY}" "OpenCV library")
 aimbot_require_file("${AIMBOT_OPENCV_DLL}" "OpenCV runtime DLL")
 aimbot_require_file("${AIMBOT_ONNXRUNTIME_DIR}/build/native/include/onnxruntime_cxx_api.h" "ONNX Runtime headers")
 aimbot_require_file("${AIMBOT_ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime.lib" "ONNX Runtime import library")
+aimbot_require_file("${AIMBOT_NLOHMANN_JSON_DIR}/include/nlohmann/json.hpp" "nlohmann/json headers")
 
 if(AIMBOT_CPPWINRT_INCLUDE_DIR STREQUAL "")
     message(FATAL_ERROR "C++/WinRT include directory is not set. Set AIMBOT_CPPWINRT_INCLUDE_DIR manually.")
@@ -312,6 +315,7 @@ target_include_directories(ai PRIVATE
     "${AIMBOT_OPENCV_INCLUDE_DIR}"
     "${AIMBOT_ONNXRUNTIME_DIR}/build/native/include"
     "${AIMBOT_CPPWINRT_INCLUDE_DIR}"
+    "${AIMBOT_NLOHMANN_JSON_DIR}/include"
 )
 
 target_link_libraries(ai PRIVATE
