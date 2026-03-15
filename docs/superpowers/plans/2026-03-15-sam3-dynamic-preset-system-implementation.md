@@ -10,22 +10,22 @@
 
 **Related Spec:** `docs/superpowers/specs/2026-03-15-sam3-dynamic-preset-system-design.md`
 
-**SAM3TensorRT References:**
-- `SAM3TensorRT/python/tokenize_prompt.py` — Reuse for preset builder (single source of truth for tokenization)
-- `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` — Reuse `tokenize_prompt_with_python()` function for C++ Python fallback
-- `SAM3TensorRT/cpp/include/sam3.cuh` — Reference for token constants (BOS=49406, PAD=49407, max_length=32)
+**SAM3TensorRT References (MUST USE):**
+| File | Purpose | How Used |
+|------|---------|----------|
+| `SAM3TensorRT/python/tokenize_prompt.py` | CLIP tokenizer script | Called by preset builder, C++ fallback |
+| `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` | Python subprocess tokenizer | Reuse `tokenize_prompt_with_python()` logic |
+| `SAM3TensorRT/cpp/include/sam3.cuh` | Token constants | BOS=49406, PAD=49407, kPromptLength=32 |
 
 ---
 
 ## Phase 1: Preset Builder Tool + Default Presets
 
-### Task 1.1: Create Preset Builder Script
+### Task 1.1: Create Preset Builder Script (Uses SAM3TensorRT Tokenizer)
 
 **Files:**
 - Create: `scripts/build_sam3_presets.py`
-- Reuse: `SAM3TensorRT/python/tokenize_prompt.py` (call as subprocess for each class)
-
-**Key Principle:** Do NOT duplicate tokenizer logic. Call existing `SAM3TensorRT/python/tokenize_prompt.py` as subprocess for each class name. This ensures we use the exact same tokenization as the reference implementation.
+- **Uses:** `SAM3TensorRT/python/tokenize_prompt.py` (subprocess call)
 
 - [ ] **Step 1: Write preset builder script (wraps SAM3TensorRT tokenizer)**
 
@@ -33,7 +33,7 @@
 #!/usr/bin/env python3
 """Build SAM3 preset JSON files from class names.
 
-Wraps SAM3TensorRT/python/tokenize_prompt.py to ensure consistent tokenization.
+Wraps SAM3TensorRT/python/tokenize_prompt.py for batch processing.
 """
 
 import argparse
@@ -43,142 +43,54 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Reference: SAM3TensorRT/python/tokenize_prompt.py
 TOKENIZER_SCRIPT = Path(__file__).parent.parent / "SAM3TensorRT" / "python" / "tokenize_prompt.py"
+DEFAULT_MAX_LENGTH = 32
 
 
-def tokenize_with_reference(class_name: str, max_length: int, model: str) -> dict:
-    """Tokenize using SAM3TensorRT's tokenizer script (single source of truth)."""
+def tokenize_with_sam3_reference(text: str, max_length: int = DEFAULT_MAX_LENGTH) -> dict:
+    """Call SAM3TensorRT tokenizer and parse IDS:/MASK: output.
+    
+    Reuses the exact same tokenizer as the C++ reference implementation.
+    """
     result = subprocess.run(
-        [
-            sys.executable,
-            str(TOKENIZER_SCRIPT),
-            "--text", class_name,
-            "--max-length", str(max_length),
-            "--model", model,
-        ],
+        [sys.executable, str(TOKENIZER_SCRIPT), "--text", text, "--max-length", str(max_length)],
         capture_output=True,
         text=True,
-        check=False,
     )
+    
     if result.returncode != 0:
-        raise RuntimeError(f"Tokenizer failed: {result.stderr}")
+        print(f"Tokenizer error: {result.stderr}", file=sys.stderr)
+        return None
     
-    # Parse output format:
-    # IDS:<comma-separated-int64>
-    # MASK:<comma-separated-int64>
-    ids = None
-    mask = None
-    for line in result.stdout.strip().splitlines():
+    input_ids = []
+    attention_mask = []
+    
+    for line in result.stdout.strip().split('\n'):
         if line.startswith("IDS:"):
-            ids = [int(v) for v in line[4:].split(",")]
+            input_ids = [int(v) for v in line[4:].split(",")]
         elif line.startswith("MASK:"):
-            mask = [int(v) for v in line[5:].split(",")]
+            attention_mask = [int(v) for v in line[5:].split(",")]
     
-    if ids is None or mask is None:
-        raise RuntimeError("Tokenizer output missing IDS or MASK lines")
+    if not input_ids or not attention_mask:
+        print(f"Failed to parse tokenizer output for '{text}'", file=sys.stderr)
+        return None
     
-    return {"ids": ids, "mask": mask}
-```
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Build SAM3 preset JSON file",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Example:\n"
-        "  py build_sam3_presets.py -c head -c body -c weapon -o models/presets/default.json\n"
-        "  py build_sam3_presets.py --interactive -o models/presets/custom.json\n",
-    )
-    parser.add_argument(
-        "--class", "-c",
-        action="append",
-        dest="classes",
-        default=[],
-        help="Class name to tokenize (can be repeated)",
-    )
-    parser.add_argument(
-        "--input", "-i",
-        type=Path,
-        help="Text file with class names (one per line)",
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=Path,
-        required=True,
-        help="Output JSON file path",
-    )
-    parser.add_argument(
-        "--max-length",
-        type=int,
-        default=32,
-        help="Token sequence length (default: 32)",
-    )
-    parser.add_argument(
-        "--model",
-        default="openai/clip-vit-base-patch32",
-        help="Tokenizer model (default: openai/clip-vit-base-patch32)",
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Interactive mode: prompt for class names",
-    )
-
-    args = parser.parse_args()
-
-    # Collect class names
-    class_names = args.classes.copy()
-
-    if args.input:
-        with open(args.input, "r", encoding="utf-8") as f:
-            class_names.extend(line.strip() for line in f if line.strip())
-
-    if args.interactive:
-        print("Interactive mode. Enter class names (empty line to finish):")
-        while True:
-            name = input("  Class: ").strip()
-            if not name:
-                break
-            class_names.append(name)
-
-    if not class_names:
-        print("Error: No class names provided", file=sys.stderr)
-        return 1
-
-    # Validate tokenizer script exists
-    if not TOKENIZER_SCRIPT.exists():
-        print(f"Error: Tokenizer script not found: {TOKENIZER_SCRIPT}", file=sys.stderr)
-        return 1
-
-    # Build presets using reference tokenizer
-    print(f"Tokenizing {len(class_names)} class(es) with SAM3TensorRT tokenizer...")
-    presets = {}
-    for name in class_names:
-        try:
-            print(f"  Tokenizing: '{name}'")
-            presets[name] = tokenize_with_reference(name, args.max_length, args.model)
-        except Exception as e:
-            print(f"  ERROR: Failed to tokenize '{name}': {e}", file=sys.stderr)
-            return 1
-
-    # Create output file
-    output = {
-        "version": 1,
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "source": "build_sam3_presets.py (wraps SAM3TensorRT/tokenize_prompt.py)",
-        "presets": presets,
+    return {
+        "ids": input_ids,
+        "mask": attention_mask,
     }
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2)
 
-    print(f"Created {args.output} with {len(presets)} preset(s)")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+def build_presets(class_names: list[str], max_length: int) -> dict:
+    """Build preset dict from class names using SAM3TensorRT tokenizer."""
+    presets = {}
+    for name in class_names:
+        print(f"Tokenizing: '{name}'")
+        tokens = tokenize_with_sam3_reference(name, max_length)
+        if tokens:
+            presets[name] = tokens
+    return presets
 ```
 
 - [ ] **Step 2: Test preset builder with default classes**
@@ -191,18 +103,16 @@ py scripts/build_sam3_presets.py --class "head" --class "body" --class "weapon" 
 
 Expected output:
 ```
-Tokenizing 5 class(es) with SAM3TensorRT tokenizer...
-  Tokenizing: 'head'
-  Tokenizing: 'body'
-  Tokenizing: 'weapon'
-  Tokenizing: 'upper body'
-  Tokenizing: 'lower body'
+Tokenizing: 'head'
+Tokenizing: 'body'
+Tokenizing: 'weapon'
+Tokenizing: 'upper body'
+Tokenizing: 'lower body'
+Tokenizing 5 class(es) using SAM3TensorRT tokenizer...
 Created models/presets/default.json with 5 preset(s)
 ```
 
-**Verify:** Tokenization uses `SAM3TensorRT/python/tokenize_prompt.py` (check subprocess call in script).
-
-- [ ] **Step 3: Verify JSON output format**
+- [ ] **Step 3: Verify JSON output format matches SAM3TensorRT token structure**
 
 Run:
 ```powershell
@@ -214,16 +124,20 @@ Expected content (abbreviated):
 {
   "version": 1,
   "created_at": "2026-03-15T...",
-  "source": "build_sam3_presets.py",
+  "source": "build_sam3_presets.py (SAM3TensorRT tokenizer)",
   "presets": {
     "head": {
-      "ids": [49406, 1234, 49407, ...],
-      "mask": [1, 1, 1, 0, ...]
-    },
-    ...
+      "ids": [49406, ..., 49407, ...],  // BOS=49406, PAD=49407 per sam3.cuh
+      "mask": [1, 1, ..., 0, ...]
+    }
   }
 }
 ```
+
+Verify tokens match SAM3TensorRT format:
+- First token = 49406 (BOS) per `kSosTokenId` in sam3.cuh
+- Length = 32 tokens per `kPromptLength` in sam3.cuh
+- PAD tokens = 49407 per `kPadTokenId` in sam3.cuh
 
 - [ ] **Step 4: Test interactive mode**
 
@@ -460,18 +374,24 @@ bool Sam3PresetLoader::ParseJsonFile(const std::filesystem::path& path) {
 }
 
 bool Sam3PresetLoader::ValidatePreset(const std::string& name, const Sam3PromptPreset& preset) {
-    if (preset.input_ids.size() != 32) {
+    // Token constants from SAM3TensorRT/cpp/include/sam3.cuh
+    constexpr int64_t kBosToken = 49406;
+    constexpr int64_t kPadToken = 49407;
+    constexpr int kPromptLength = 32;
+    
+    if (preset.input_ids.size() != static_cast<size_t>(kPromptLength)) {
         std::cerr << "[PresetLoader] Skipping '" << name << "': ids size is " 
-                  << preset.input_ids.size() << ", expected 32" << std::endl;
+                  << preset.input_ids.size() << ", expected " << kPromptLength << std::endl;
         return false;
     }
-    if (preset.attention_mask.size() != 32) {
+    if (preset.attention_mask.size() != static_cast<size_t>(kPromptLength)) {
         std::cerr << "[PresetLoader] Skipping '" << name << "': mask size is " 
-                  << preset.attention_mask.size() << ", expected 32" << std::endl;
+                  << preset.attention_mask.size() << ", expected " << kPromptLength << std::endl;
         return false;
     }
-    if (preset.input_ids[0] != 49406) {
-        std::cerr << "[PresetLoader] Skipping '" << name << "': first token is not BOS (49406)" << std::endl;
+    if (preset.input_ids[0] != kBosToken) {
+        std::cerr << "[PresetLoader] Skipping '" << name << "': first token is not BOS (" 
+                  << kBosToken << ")" << std::endl;
         return false;
     }
     return true;
@@ -571,40 +491,226 @@ git commit -m "feat: add Sam3PresetLoader class with JSON parsing and hot-reload
 
 ---
 
-### Task 2.2: Integrate Preset Loader + Python Fallback
+### Task 2.2: Add Python Fallback Tokenizer (Reuses SAM3TensorRT Code)
+
+**Files:**
+- Modify: `sunone_aimbot_2/training/training_sam3_preset_loader.h`
+- Modify: `sunone_aimbot_2/training/training_sam3_preset_loader.cpp`
+- **Reference:** `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp:303-364` (`tokenize_prompt_with_python()`)
+
+- [ ] **Step 1: Add Python fallback declaration to header**
+
+Modify `training_sam3_preset_loader.h`:
+```cpp
+// Add to Sam3PresetLoader class:
+class Sam3PresetLoader {
+public:
+    // ... existing methods ...
+    
+    // Tokenize unknown prompt using SAM3TensorRT Python tokenizer
+    // Returns true on success, fills output vectors
+    static bool TokenizeWithPython(const std::string& prompt,
+                                   int tokenCount,
+                                   std::vector<int64_t>& inputIds,
+                                   std::vector<int64_t>& attentionMask);
+    
+    // ... rest of class ...
+};
+```
+
+- [ ] **Step 2: Implement Python fallback (based on sam3_pcs_app.cpp)**
+
+Modify `training_sam3_preset_loader.cpp`:
+```cpp
+#include <cstdio>
+#include <sstream>
+
+// Token constants from SAM3TensorRT/cpp/include/sam3.cuh
+constexpr int64_t kSam3BosToken = 49406;   // kBosToken
+constexpr int64_t kSam3PadToken = 49407;   // kPadToken
+constexpr int kSam3PromptLength = 32;      // kPromptLength
+
+namespace {
+
+// Based on SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp:265-283
+std::string NormalizeWindowsPath(const std::string& path) {
+    std::string result = path;
+    std::replace(result.begin(), result.end(), '/', '\\');
+    return result;
+}
+
+std::string ShellQuote(const std::string& s) {
+    std::string escaped;
+    for (char c : s) {
+        if (c == '"') escaped += "\\\"";
+        else if (c == '\\') escaped += "\\\\";
+        else escaped += c;
+    }
+    return "\"" + escaped + "\"";
+}
+
+}  // namespace
+
+bool Sam3PresetLoader::TokenizeWithPython(const std::string& prompt,
+                                          int tokenCount,
+                                          std::vector<int64_t>& inputIds,
+                                          std::vector<int64_t>& attentionMask) {
+    // Environment variables (same as sam3_pcs_app.cpp:306-314)
+    const char* pythonEnv = std::getenv("SAM3_TOKENIZER_PYTHON");
+    const char* scriptEnv = std::getenv("SAM3_TOKENIZER_SCRIPT");
+    
+    // Defaults: use .venv python and SAM3TensorRT script
+    const std::string python = pythonEnv ? pythonEnv : ".venv\\Scripts\\python.exe";
+    const std::string script = scriptEnv ? scriptEnv : 
+                               "SAM3TensorRT\\python\\tokenize_prompt.py";
+    
+    // Build command (same as sam3_pcs_app.cpp:320-328)
+    const std::string command = 
+        ShellQuote(NormalizeWindowsPath(python)) + " " +
+        ShellQuote(NormalizeWindowsPath(script)) +
+        " --text " + ShellQuote(prompt) +
+        " --max-length " + std::to_string(tokenCount);
+    
+    // Execute and capture output (same as sam3_pcs_app.cpp:285-300)
+    FILE* pipe = _popen(command.c_str(), "r");
+    if (!pipe) {
+        std::cerr << "[PresetLoader] Python tokenizer failed to start" << std::endl;
+        return false;
+    }
+    
+    std::string output;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        output += buffer;
+    }
+    const int code = _pclose(pipe);
+    if (code != 0) {
+        std::cerr << "[PresetLoader] Python tokenizer exited with code " << code << std::endl;
+        return false;
+    }
+    
+    // Parse IDS: and MASK: lines (same as sam3_pcs_app.cpp:340-347)
+    std::stringstream ss(output);
+    std::string line;
+    std::string idsLine, maskLine;
+    
+    while (std::getline(ss, line)) {
+        line = line.substr(0, line.find_last_not_of(" \r\n") + 1);  // trim
+        if (line.rfind("IDS:", 0) == 0) {
+            idsLine = line.substr(4);
+        } else if (line.rfind("MASK:", 0) == 0) {
+            maskLine = line.substr(5);
+        }
+    }
+    
+    if (idsLine.empty() || maskLine.empty()) {
+        std::cerr << "[PresetLoader] Python tokenizer output missing IDS:/MASK:" << std::endl;
+        return false;
+    }
+    
+    // Parse CSV (same as sam3_pcs_app.cpp:349-359)
+    auto parseCsv = [](const std::string& csv) -> std::vector<int64_t> {
+        std::vector<int64_t> result;
+        std::stringstream ss(csv);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            result.push_back(std::stoll(token));
+        }
+        return result;
+    };
+    
+    inputIds = parseCsv(idsLine);
+    attentionMask = parseCsv(maskLine);
+    
+    if (inputIds.size() != static_cast<size_t>(tokenCount) ||
+        attentionMask.size() != static_cast<size_t>(tokenCount)) {
+        std::cerr << "[PresetLoader] Python tokenizer returned wrong length" << std::endl;
+        return false;
+    }
+    
+    return true;
+}
+```
+
+- [ ] **Step 3: Integrate Python fallback into EncodeSam3Prompt**
+
+Modify `training_sam3_labeler_trt.cpp` in `detail::EncodeSam3Prompt()`:
+
+```cpp
+inline void EncodeSam3Prompt(const std::string& prompt,
+                             int tokenCount,
+                             std::vector<int64_t>& inputIds,
+                             std::vector<int64_t>& attentionMask) {
+    // Initialize with padding
+    inputIds.assign(tokenCount, kSam3PadToken);
+    attentionMask.assign(tokenCount, 0);
+
+    // 1. Check preset loader first (dynamic presets from JSON)
+    if (presetLoader_ != nullptr) {
+        if (const auto* preset = presetLoader_->GetPreset(prompt)) {
+            const size_t copyCount = std::min(
+                static_cast<size_t>(tokenCount),
+                std::min(preset->input_ids.size(), preset->attention_mask.size()));
+            for (size_t i = 0; i < copyCount; ++i) {
+                inputIds[i] = preset->input_ids[i];
+                attentionMask[i] = preset->attention_mask[i];
+            }
+            return;
+        }
+    }
+
+    // 2. Try Python fallback for unknown prompts (NEW - uses SAM3TensorRT)
+    if (Sam3PresetLoader::TokenizeWithPython(prompt, tokenCount, inputIds, attentionMask)) {
+        std::cout << "[SAM3] Tokenized unknown prompt via Python: " << prompt << std::endl;
+        return;
+    }
+
+    // 3. Fallback to hardcoded person preset (backward compatibility)
+    if (/* ... existing person preset logic ... */) {
+        return;
+    }
+
+    // 4. Final fallback: hash-based encoding (legacy, warn user)
+    std::cerr << "[SAM3] Using hash fallback for unknown prompt: " << prompt 
+              << " (consider adding to preset file)" << std::endl;
+    // ... existing hash logic ...
+}
+```
+
+- [ ] **Step 4: Build and test Python fallback**
+
+Run:
+```powershell
+powershell -ExecutionPolicy Bypass -File .opencode/plugins/tool-search/scripts/Build-Cuda.ps1
+```
+
+Expected: Build succeeds.
+
+- [ ] **Step 5: Manual test Python fallback**
+
+1. Run `ai.exe`
+2. Go to Training → Label
+3. Enter custom prompt not in presets (e.g., "backpack")
+4. Check console shows: `[SAM3] Tokenized unknown prompt via Python: backpack`
+5. Verify SAM3 initializes with custom prompt
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add sunone_aimbot_2/training/training_sam3_preset_loader.h sunone_aimbot_2/training/training_sam3_preset_loader.cpp sunone_aimbot_2/training/training_sam3_labeler_trt.cpp
+git commit -m "feat: add Python fallback tokenizer (reuses SAM3TensorRT code)"
+```
+
+---
+
+### Task 2.3: Integrate Preset Loader into SAM3 Labeler
 
 **Files:**
 - Modify: `sunone_aimbot_2/training/training_sam3_labeler.h`
 - Modify: `sunone_aimbot_2/training/training_sam3_labeler_trt.cpp`
-- Reuse: `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` (function `tokenize_prompt_with_python()`)
 - Reference: existing `GetSam3PromptPreset()` function
 
-**Key Principle:** Reuse existing Python subprocess tokenizer from SAM3TensorRT reference instead of writing new one.
-
-- [ ] **Step 1: Copy Python tokenizer helper from SAM3TensorRT**
-
-Read: `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` (lines ~303-364)
-
-Copy `tokenize_prompt_with_python()` function to `training_sam3_labeler_trt.cpp`:
-
-```cpp
-namespace {
-
-// Reused from SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp
-bool tokenize_prompt_with_python(const std::string& prompt,
-                                 std::vector<int64_t>& ids,
-                                 std::vector<int64_t>& mask) {
-    // Same implementation as reference:
-    // - Calls SAM3TensorRT/python/tokenize_prompt.py via _popen()
-    // - Parses IDS: and MASK: lines from stdout
-    // - Returns true on success, fills output vectors
-    // ... (copy exact logic from reference)
-}
-
-}  // namespace
-```
-
-- [ ] **Step 2: Add preset loader member to Sam3Labeler**
+- [ ] **Step 1: Add preset loader member to Sam3Labeler**
 
 Modify `training_sam3_labeler.h`:
 ```cpp
@@ -633,7 +739,7 @@ void Sam3Labeler::SetPresetLoader(const Sam3PresetLoader* loader) {
 }
 ```
 
-- [ ] **Step 3: Update EncodeSam3Prompt to use preset loader + Python fallback**
+- [ ] **Step 3: Update EncodeSam3Prompt to use preset loader**
 
 Modify `detail::EncodeSam3Prompt()` in `training_sam3_labeler_trt.cpp`:
 
@@ -646,7 +752,7 @@ inline void EncodeSam3Prompt(const std::string& prompt,
     inputIds.assign(tokenCount, 49407);
     attentionMask.assign(tokenCount, 0);
 
-    // Priority 1: Preset loader (dynamic presets from JSON)
+    // Check preset loader first (dynamic presets)
     if (presetLoader_ != nullptr) {
         if (const auto* preset = presetLoader_->GetPreset(prompt)) {
             const size_t copyCount = std::min(
@@ -660,37 +766,40 @@ inline void EncodeSam3Prompt(const std::string& prompt,
         }
     }
 
-    // Priority 2: Python fallback (uses SAM3TensorRT tokenizer)
-    if (tokenize_prompt_with_python(prompt, inputIds, attentionMask)) {
-        return;  // Success
-    }
-
-    // Priority 3: Hardcoded person preset (backward compatibility)
+    // Fallback to hardcoded person preset (for backward compatibility)
     if (/* ... existing person preset logic ... */) {
         return;
     }
 
-    // Priority 4: Hash fallback (legacy, last resort)
+    // Final fallback: hash-based encoding
     // ... existing hash logic ...
 }
 ```
 
-**Token Priority Order:**
-1. JSON preset file (user-editable)
-2. Python CLIP tokenizer (accurate for any prompt, uses SAM3TensorRT/tokenize_prompt.py)
-3. Hardcoded presets (backward compat)
-4. Hash fallback (legacy, non-invertible)
+- [ ] **Step 4: Build and test**
 
-- [ ] **Step 4: Add token constants from SAM3TensorRT reference**
+Run:
+```powershell
+powershell -ExecutionPolicy Bypass -File .opencode/plugins/tool-search/scripts/Build-Cuda.ps1
+```
 
-Add to `training_sam3_labeler.h` (top of file, after includes):
+Expected: Build succeeds.
 
-```cpp
-// Token constants from SAM3TensorRT/cpp/include/sam3.cuh
-// Ensures consistency with reference implementation
-namespace sam3_tokens {
-    constexpr int64_t kBOS = 49406;  // <|startoftext|>
-    constexpr int64_t kEOS = 49407;  //
+- [ ] **Step 5: Commit**
+
+```bash
+git add sunone_aimbot_2/training/training_sam3_labeler.h sunone_aimbot_2/training/training_sam3_labeler_trt.cpp
+git commit -m "feat: integrate preset loader into SAM3 labeler token encoding"
+```
+
+---
+
+## Phase 3: Configuration + UI Integration
+
+### Task 3.1: Add Config Fields
+
+**Files:**
+- Modify: `sunone_aimbot_2/config/config.h`
 - Modify: `sunone_aimbot_2/config/config.cpp`
 
 - [ ] **Step 1: Add config fields to header**
