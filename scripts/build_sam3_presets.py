@@ -56,8 +56,8 @@ def tokenize_with_sam3_reference(
         return None
 
     return {
-        "ids": input_ids,
-        "mask": attention_mask,
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
     }
 
 

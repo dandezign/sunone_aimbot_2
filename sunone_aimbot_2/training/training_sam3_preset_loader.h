@@ -13,7 +13,7 @@ namespace training {
 class Sam3PresetLoader {
 public:
     Sam3PresetLoader();
-    ~Sam3PresetLoader();
+    ~Sam3PresetLoader();  // Frees _strdup'd preset names
 
     bool LoadFromFile(const std::filesystem::path& path);
     const Sam3PromptPreset* GetPreset(const std::string& className) const;

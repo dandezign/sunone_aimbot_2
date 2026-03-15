@@ -12,7 +12,12 @@ Sam3PresetLoader::Sam3PresetLoader()
     : lastModified_{} {
 }
 
-Sam3PresetLoader::~Sam3PresetLoader() = default;
+Sam3PresetLoader::~Sam3PresetLoader() {
+    // Free _strdup'd preset names
+    for (auto& [name, preset] : presets_) {
+        free(const_cast<char*>(preset.name));
+    }
+}
 
 bool Sam3PresetLoader::LoadFromFile(const fs::path& path) {
     if (!fs::exists(path)) {
@@ -92,16 +97,24 @@ bool Sam3PresetLoader::ParseJsonFile(const fs::path& path) {
             return false;
         }
 
+        // Support both flat format and nested format with "presets" key
+        json presetsObj;
+        if (j.contains("presets") && j["presets"].is_object()) {
+            presetsObj = j["presets"];
+        } else {
+            presetsObj = j;
+        }
+
         presets_.clear();
 
-        for (const auto& [key, value] : j.items()) {
+        for (const auto& [key, value] : presetsObj.items()) {
             if (!value.is_object()) {
                 lastError_ = "Preset '" + key + "' must be a JSON object";
                 return false;
             }
 
             Sam3PromptPreset preset;
-            preset.name = _strdup(key.c_str());
+            preset.name = _strdup(key.c_str());  // Caller owns memory; freed when preset destroyed
 
             if (!value.contains("input_ids") || !value.contains("attention_mask")) {
                 lastError_ = "Preset '" + key + "' missing required fields (input_ids, attention_mask)";
