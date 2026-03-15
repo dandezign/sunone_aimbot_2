@@ -3,6 +3,7 @@
 #include "sunone_aimbot_2/training/training_label_runtime.h"
 #include "sunone_aimbot_2/training/training_sam3_labeler.h"
 #include "sunone_aimbot_2/training/training_sam3_runtime.h"
+#include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
 #include "sunone_aimbot_2/overlay/sam3_preview_render_rules.h"
 #include <iostream>
 #include <stdexcept>
@@ -1055,6 +1056,63 @@ int main() {
             Check(inputIds[1] != 2533, "unknown prompt should not use person token");
             // Hash encoding produces IDs in range [1000, 48000)
             Check(inputIds[1] >= 1000 && inputIds[1] < 48000, "unknown prompt should have hash-based token");
+        }
+
+        // Test Sam3PresetLoader loads valid preset file
+        {
+            training::Sam3PresetLoader loader;
+            const bool loaded = loader.LoadFromFile("models/presets/default.json");
+            Check(loaded, ("preset loader should load default.json: " + loader.GetError()).c_str());
+            Check(loader.IsLoaded(), "loader should report loaded state");
+            
+            const auto names = loader.GetPresetNames();
+            Check(names.size() == 5, "default.json should have 5 presets");
+            
+            const auto* headPreset = loader.GetPreset("head");
+            Check(headPreset != nullptr, "head preset should exist");
+            Check(headPreset->inputIds.size() == 32, "head preset should have 32 ids");
+            Check(headPreset->inputIds[0] == 49406, "head preset should start with BOS");
+            Check(headPreset->attentionMask[0] == 1, "head preset BOS should have mask 1");
+            
+            const auto* personPreset = loader.GetPreset("person");
+            Check(personPreset != nullptr, "person preset should exist");
+            Check(personPreset->inputIds[1] == 2533, "person preset should have token 2533");
+            
+            const auto* missingPreset = loader.GetPreset("nonexistent");
+            Check(missingPreset == nullptr, "nonexistent preset should return nullptr");
+        }
+
+        // Test Sam3PresetLoader handles missing file
+        {
+            training::Sam3PresetLoader loader;
+            const bool loaded = loader.LoadFromFile("nonexistent/path/presets.json");
+            Check(!loaded, "loader should fail for missing file");
+            Check(loader.GetError().find("not found") != std::string::npos, "error should mention file not found");
+        }
+
+        // Test Sam3PresetLoader GetPresetNames returns all keys
+        {
+            training::Sam3PresetLoader loader;
+            const bool loaded = loader.LoadFromFile("models/presets/default.json");
+            Check(loaded, "loader should load default.json");
+            
+            const auto names = loader.GetPresetNames();
+            Check(std::find(names.begin(), names.end(), "person") != names.end(), "should have person preset");
+            Check(std::find(names.begin(), names.end(), "head") != names.end(), "should have head preset");
+            Check(std::find(names.begin(), names.end(), "player") != names.end(), "should have player preset");
+            Check(std::find(names.begin(), names.end(), "weapon") != names.end(), "should have weapon preset");
+            Check(std::find(names.begin(), names.end(), "vehicle") != names.end(), "should have vehicle preset");
+        }
+
+        // Test Sam3PresetLoader hot reload disabled
+        {
+            training::Sam3PresetLoader loader;
+            const bool loaded = loader.LoadFromFile("models/presets/default.json");
+            Check(loaded, "loader should load default.json");
+            
+            loader.EnableHotReload(false);
+            const bool changed = loader.CheckForChanges();
+            Check(!changed, "hot reload should be disabled");
         }
 
         // Cleanup test directory

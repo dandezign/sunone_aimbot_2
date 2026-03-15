@@ -462,6 +462,7 @@ add_executable(training_labeling_tests
     "${SRC_DIR}/training/training_dataset_manager.cpp"
     "${SRC_DIR}/training/training_label_runtime.cpp"
     "${SRC_DIR}/training/training_sam3_runtime.cpp"
+    "${SRC_DIR}/training/training_sam3_preset_loader.cpp"
 )
 
 if(AIMBOT_USE_CUDA)
@@ -478,6 +479,7 @@ target_include_directories(training_labeling_tests PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${SRC_DIR}"
     "${AIMBOT_OPENCV_INCLUDE_DIR}"
+    "${AIMBOT_NLOHMANN_JSON_DIR}/include"
 )
 
 target_compile_definitions(training_labeling_tests PRIVATE
