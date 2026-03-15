@@ -121,6 +121,7 @@ def main() -> int:
 
     with open(args.output, "w") as f:
         json.dump(output_data, f, indent=2)
+        f.write("\n")  # Trailing newline for POSIX compliance
 
     print(f"Created {args.output} with {len(presets)} preset(s)")
     return 0

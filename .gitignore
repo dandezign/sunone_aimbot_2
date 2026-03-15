@@ -67,7 +67,10 @@ setup_opencv_dml_run.log
 
 # zip files
 *.zip
+*.png
+*.jpeg
 models/
+!models/presets/*.json
 .worktrees
 .venv
 .idea
