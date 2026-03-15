@@ -977,7 +977,8 @@ int main() {
             std::vector<int64_t> inputIds;
             std::vector<int64_t> attentionMask;
             
-            training::detail::EncodeSam3Prompt("person", 32, inputIds, attentionMask);
+            const auto* preset = training::detail::GetSam3PromptPreset("person");
+            training::detail::EncodeSam3Prompt(preset, "person", 32, inputIds, attentionMask);
             
             Check(inputIds.size() == 32, "inputIds should have 32 elements");
             Check(attentionMask.size() == 32, "attentionMask should have 32 elements");
@@ -1006,8 +1007,10 @@ int main() {
             std::vector<int64_t> inputIds1, attentionMask1;
             std::vector<int64_t> inputIds2, attentionMask2;
             
-            training::detail::EncodeSam3Prompt("person", 32, inputIds1, attentionMask1);
-            training::detail::EncodeSam3Prompt("PERSON", 32, inputIds2, attentionMask2);
+            const auto* preset1 = training::detail::GetSam3PromptPreset("person");
+            const auto* preset2 = training::detail::GetSam3PromptPreset("PERSON");
+            training::detail::EncodeSam3Prompt(preset1, "person", 32, inputIds1, attentionMask1);
+            training::detail::EncodeSam3Prompt(preset2, "PERSON", 32, inputIds2, attentionMask2);
             
             Check(inputIds1 == inputIds2, "case-insensitive person preset should produce same tokens");
             Check(attentionMask1 == attentionMask2, "case-insensitive person preset should produce same masks");
@@ -1019,9 +1022,12 @@ int main() {
             std::vector<int64_t> ids2, mask2;
             std::vector<int64_t> ids3, mask3;
             
-            training::detail::EncodeSam3Prompt("person", 32, ids1, mask1);
-            training::detail::EncodeSam3Prompt("a person", 32, ids2, mask2);
-            training::detail::EncodeSam3Prompt("a photo of a person", 32, ids3, mask3);
+            const auto* preset1 = training::detail::GetSam3PromptPreset("person");
+            const auto* preset2 = training::detail::GetSam3PromptPreset("a person");
+            const auto* preset3 = training::detail::GetSam3PromptPreset("a photo of a person");
+            training::detail::EncodeSam3Prompt(preset1, "person", 32, ids1, mask1);
+            training::detail::EncodeSam3Prompt(preset2, "a person", 32, ids2, mask2);
+            training::detail::EncodeSam3Prompt(preset3, "a photo of a person", 32, ids3, mask3);
             
             Check(ids1 == ids2, "person variations should produce same tokens");
             Check(ids2 == ids3, "person variations should produce same tokens");
@@ -1033,9 +1039,12 @@ int main() {
             std::vector<int64_t> ids2, mask2;
             std::vector<int64_t> ids3, mask3;
             
-            training::detail::EncodeSam3Prompt("person", 32, ids1, mask1);
-            training::detail::EncodeSam3Prompt("people", 32, ids2, mask2);
-            training::detail::EncodeSam3Prompt("human", 32, ids3, mask3);
+            const auto* preset1 = training::detail::GetSam3PromptPreset("person");
+            const auto* preset2 = training::detail::GetSam3PromptPreset("people");
+            const auto* preset3 = training::detail::GetSam3PromptPreset("human");
+            training::detail::EncodeSam3Prompt(preset1, "person", 32, ids1, mask1);
+            training::detail::EncodeSam3Prompt(preset2, "people", 32, ids2, mask2);
+            training::detail::EncodeSam3Prompt(preset3, "human", 32, ids3, mask3);
             
             Check(ids1 == ids2, "people should use person preset");
             Check(ids2 == ids3, "human should use person preset");
@@ -1046,7 +1055,8 @@ int main() {
             std::vector<int64_t> inputIds;
             std::vector<int64_t> attentionMask;
             
-            training::detail::EncodeSam3Prompt("unknown_xyz_class", 32, inputIds, attentionMask);
+            const auto* preset = training::detail::GetSam3PromptPreset("unknown_xyz_class");
+            training::detail::EncodeSam3Prompt(preset, "unknown_xyz_class", 32, inputIds, attentionMask);
             
             // Should still have BOS
             Check(inputIds[0] == 49406, "unknown prompt should have BOS token");

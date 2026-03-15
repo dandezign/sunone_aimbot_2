@@ -186,6 +186,7 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/training/training_dataset_manager.cpp"
     "${SRC_DIR}/training/training_label_runtime.cpp"
     "${SRC_DIR}/training/training_sam3_runtime.cpp"
+    "${SRC_DIR}/training/training_sam3_preset_loader.cpp"
 )
 
 if(AIMBOT_USE_CUDA)

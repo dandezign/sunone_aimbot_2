@@ -13,6 +13,8 @@
 
 namespace training {
 
+class Sam3PresetLoader;
+
 struct Sam3Availability {
     bool ready;
     std::string message;
@@ -160,7 +162,8 @@ inline const Sam3PromptPreset* GetSam3PromptPreset(const std::string& prompt) {
     return nullptr;
 }
 
-inline void EncodeSam3Prompt(const std::string& prompt,
+inline void EncodeSam3Prompt(const Sam3PromptPreset* preset,
+                              const std::string& prompt,
                               int tokenCount,
                               std::vector<int64_t>& inputIds,
                               std::vector<int64_t>& attentionMask) {
@@ -171,12 +174,11 @@ inline void EncodeSam3Prompt(const std::string& prompt,
     inputIds.assign(static_cast<size_t>(std::max(tokenCount, 0)), kTokenPad);
     attentionMask.assign(static_cast<size_t>(std::max(tokenCount, 0)), 0);
 
-    if (prompt.empty() || tokenCount <= 0) {
+    if (tokenCount <= 0) {
         return;
     }
 
-    // Try preset first (for common classes like "person")
-    if (const auto* preset = GetSam3PromptPreset(prompt)) {
+    if (preset != nullptr) {
         const size_t copyCount = std::min(static_cast<size_t>(tokenCount), 
                                           preset->inputIds.size());
         for (size_t i = 0; i < copyCount; ++i) {
@@ -186,7 +188,10 @@ inline void EncodeSam3Prompt(const std::string& prompt,
         return;
     }
 
-    // Fall back to hash-based encoding for unknown prompts
+    if (prompt.empty()) {
+        return;
+    }
+
     inputIds[0] = kTokenBos;
     attentionMask[0] = 1;
 
@@ -213,7 +218,7 @@ inline void EncodeSam3PromptForTests(const std::string& prompt,
                                      int tokenCount,
                                      std::vector<int64_t>& inputIds,
                                      std::vector<int64_t>& attentionMask) {
-    detail::EncodeSam3Prompt(prompt, tokenCount, inputIds, attentionMask);
+    detail::EncodeSam3Prompt(nullptr, prompt, tokenCount, inputIds, attentionMask);
 }
 
 class Sam3Labeler {
@@ -231,6 +236,7 @@ public:
     Sam3Availability GetAvailability() const;
     Sam3LabelResult LabelFrame(const Sam3InferenceRequest& request);
     
+    void SetPresetLoader(const Sam3PresetLoader* loader);
     Sam3Availability GetAvailabilityForTests() const;
 
 private:

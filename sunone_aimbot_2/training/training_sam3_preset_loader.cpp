@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
 #include <nlohmann/json.hpp>
 #include <fstream>

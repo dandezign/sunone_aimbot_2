@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "sunone_aimbot_2/training/training_sam3_labeler.h"
+#include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
 
 #ifdef USE_CUDA
 
@@ -321,6 +322,7 @@ struct Sam3Labeler::Impl {
     TensorRtPtr<nvinfer1::IExecutionContext> context;
     cudaStream_t stream = nullptr;
     std::unordered_map<std::string, TensorBuffer> buffers;
+    const Sam3PresetLoader* presetLoader_ = nullptr;
 };
 
 Sam3Labeler::Sam3Labeler() : impl_(new Impl()) {
@@ -679,7 +681,11 @@ Sam3LabelResult Sam3Labeler::LabelFrame(const Sam3InferenceRequest& request) {
 
     std::vector<int64_t> inputIds;
     std::vector<int64_t> attentionMask;
-    detail::EncodeSam3Prompt(prompt, impl_->tokenCount, inputIds, attentionMask);
+    const Sam3PromptPreset* preset = nullptr;
+    if (impl_->presetLoader_ != nullptr) {
+        preset = impl_->presetLoader_->GetPreset(prompt);
+    }
+    detail::EncodeSam3Prompt(preset, prompt, impl_->tokenCount, inputIds, attentionMask);
 
     std::string error;
     const auto copyInput = [&](const char* name, const void* source, size_t bytes) -> bool {
@@ -758,6 +764,10 @@ Sam3LabelResult Sam3Labeler::LabelFrame(const Sam3InferenceRequest& request) {
 
 Sam3Availability Sam3Labeler::GetAvailabilityForTests() const {
     return GetAvailability();
+}
+
+void Sam3Labeler::SetPresetLoader(const Sam3PresetLoader* loader) {
+    impl_->presetLoader_ = loader;
 }
 
 }  // namespace training
