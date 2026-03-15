@@ -479,6 +479,11 @@ endif()
 target_include_directories(training_labeling_tests PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${SRC_DIR}"
+    "${SRC_DIR}/config"
+    "${SRC_DIR}/detector"
+    "${SRC_DIR}/mouse"
+    "${SRC_DIR}/modules/serial/include"
+    "${AIMBOT_ONNXRUNTIME_DIR}/build/native/include"
     "${AIMBOT_OPENCV_INCLUDE_DIR}"
     "${AIMBOT_NLOHMANN_JSON_DIR}/include"
 )
