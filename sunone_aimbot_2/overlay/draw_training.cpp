@@ -20,6 +20,7 @@
 #include "training/training_sam3_labeler.h"
 #include "training/training_inference_mode.h"
 #include "training/training_sam3_runtime.h"
+#include "training/training_sam3_preset_loader.h"
 
 extern Config config;
 
@@ -132,6 +133,67 @@ static void DrawTrainingLabelSection()
             config.training_label_hotkey.push_back(hotkeyBuffer);
         }
         OverlayConfig_MarkDirty();
+    }
+
+    {
+        char presetFileBuf[256];
+        snprintf(presetFileBuf, sizeof(presetFileBuf), "%s", config.training_sam3_preset_file.c_str());
+        if (ImGui::InputTextWithHint("Preset File", "e.g., default.json", presetFileBuf, sizeof(presetFileBuf))) {
+            config.training_sam3_preset_file = presetFileBuf;
+            OverlayConfig_MarkDirty();
+        }
+    }
+    ImGui::SameLine();
+    HelpMarker("Preset file to load (relative to presets directory).");
+
+    if (ImGui::Checkbox("Hot Reload", &config.training_sam3_preset_hot_reload)) {
+        OverlayConfig_MarkDirty();
+    }
+    ImGui::SameLine();
+    HelpMarker("Automatically reload preset file when it changes.");
+
+    {
+        char presetClassBuf[128];
+        snprintf(presetClassBuf, sizeof(presetClassBuf), "%s", config.training_sam3_preset_class.c_str());
+        if (ImGui::InputTextWithHint("Preset Class", "e.g., head", presetClassBuf, sizeof(presetClassBuf))) {
+            config.training_sam3_preset_class = presetClassBuf;
+            OverlayConfig_MarkDirty();
+        }
+    }
+    ImGui::SameLine();
+    HelpMarker("Select a class from the loaded preset file.");
+
+    if (const auto* loader = training::GetTrainingPresetLoader()) {
+        const auto presetPath = std::filesystem::path(config.training_sam3_presets_dir) / config.training_sam3_preset_file;
+        if (!loader->IsLoaded()) {
+            const_cast<training::Sam3PresetLoader*>(loader)->LoadFromFile(presetPath);
+        }
+        if (loader->IsLoaded()) {
+            const auto names = loader->GetPresetNames();
+            if (!names.empty()) {
+                int currentIndex = 0;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (names[i] == config.training_sam3_preset_class) {
+                        currentIndex = static_cast<int>(i);
+                        break;
+                    }
+                }
+
+                std::vector<const char*> items;
+                for (const auto& name : names) {
+                    items.push_back(name.c_str());
+                }
+
+                int currentItemIndex = currentIndex;
+                if (ImGui::Combo("Preset Class Dropdown", &currentItemIndex, items.data(), static_cast<int>(items.size()))) {
+                    config.training_sam3_preset_class = names[currentItemIndex];
+                    config.training_label_prompt = names[currentItemIndex];
+                    OverlayConfig_MarkDirty();
+                }
+            }
+        } else if (!loader->GetError().empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Preset error: %s", loader->GetError().c_str());
+        }
     }
 
     {

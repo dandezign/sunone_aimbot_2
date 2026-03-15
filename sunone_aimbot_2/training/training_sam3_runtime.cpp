@@ -878,23 +878,7 @@ void ShutdownTrainingRuntime() {
         runtime->Shutdown();
     }
 }
-
 Sam3PresetLoader* GetTrainingPresetLoader() {
-    static bool initialized = false;
-    static std::mutex initMutex;
-    
-    if (!initialized) {
-        std::lock_guard<std::mutex> lock(initMutex);
-        if (!initialized) {
-            const auto exePath = GetCurrentExecutablePath();
-            const auto trainingRoot = DatasetManager::GetTrainingRootForExe(exePath);
-            const auto presetPath = trainingRoot / std::filesystem::path("presets") / config.training_sam3_preset_file;
-            g_presetLoader.LoadFromFile(presetPath);
-            g_presetLoader.EnableHotReload(config.training_sam3_preset_hot_reload);
-            initialized = true;
-        }
-    }
-    
     return &g_presetLoader;
 }
 
