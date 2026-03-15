@@ -1,3 +1,8 @@
+# Environment files (contains secrets)
+.env
+.env.local
+.env.user
+
 # Prerequisites
 *.d
 
@@ -69,3 +74,4 @@ setup_opencv_dml_run.log
 *.engine
 *.onnx
 *.pt
+SAM3TensorRT/python/onnx_weights/

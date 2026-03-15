@@ -210,6 +210,7 @@ public:
 
     // Training - Label
     bool training_label_enabled;
+    std::string training_inference_mode;
     std::vector<std::string> training_label_hotkey;
     std::string training_label_prompt;
     std::string training_label_class;
@@ -219,6 +220,15 @@ public:
     bool training_label_preview_enabled;
     int training_label_preview_interval_ms;
     std::string training_sam3_engine_path;
+    float training_sam3_mask_threshold;
+    int training_sam3_min_mask_pixels;
+    float training_sam3_min_confidence;
+    int training_sam3_min_box_width;
+    int training_sam3_min_box_height;
+    float training_sam3_min_mask_fill_ratio;
+    int training_sam3_max_detections;
+    bool training_sam3_draw_preview_boxes;
+    bool training_sam3_draw_confidence_labels;
 
     struct GameProfile
     {

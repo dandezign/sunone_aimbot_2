@@ -25,7 +25,6 @@
 
 extern std::atomic<bool> detector_model_changed;
 extern std::atomic<bool> detection_resolution_changed;
-extern std::atomic<bool> detectionPaused;
 
 namespace
 {
@@ -447,13 +446,9 @@ int DirectMLDetector::getNumberOfClasses()
 
 void DirectMLDetector::processFrame(const cv::Mat& frame)
 {
-    if (detectionPaused)
+    if (!training::ShouldDetectorProcessFrames(activeInferenceMode.load()))
     {
-        std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
-        detectionBuffer.boxes.clear();
-        detectionBuffer.classes.clear();
-        detectionBuffer.version++;
-        detectionBuffer.cv.notify_all();
+        training::ClearDetectorStateForInactiveMode();
         return;
     }
     std::unique_lock<std::mutex> lock(inferenceMutex);
@@ -476,13 +471,9 @@ void DirectMLDetector::dmlInferenceThread()
                 std::cout << "[DML] Detector reloaded: " << config.ai_model << std::endl;
             }
 
-            if (detectionPaused)
+            if (!training::ShouldDetectorProcessFrames(activeInferenceMode.load()))
             {
-                std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
-                detectionBuffer.boxes.clear();
-                detectionBuffer.classes.clear();
-                detectionBuffer.version++;
-                detectionBuffer.cv.notify_all();
+                training::ClearDetectorStateForInactiveMode();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }

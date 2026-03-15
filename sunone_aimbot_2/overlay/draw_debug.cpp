@@ -19,6 +19,9 @@
 #include "include/other_tools.h"
 #include "capture.h"
 #include "sunone_aimbot_2/debug/detection_debug_export.h"
+#include "sunone_aimbot_2/training/training_sam3_runtime.h"
+#include "sunone_aimbot_2/training/training_inference_mode.h"
+#include "sunone_aimbot_2/overlay/sam3_preview_render_rules.h"
 #include "overlay/ui_sections.h"
 
 #ifdef USE_CUDA
@@ -46,10 +49,35 @@ static ID3D11Texture2D* g_maskTex = nullptr;
 static ID3D11ShaderResourceView* g_maskSRV = nullptr;
 static int maskTexW = 0, maskTexH = 0;
 
+static void clearDebugFrameTexture();
+
+static void clearDebugFrameTexture()
+{
+    SAFE_RELEASE(g_debugTex);
+    SAFE_RELEASE(g_debugSRV);
+    texW = 0;
+    texH = 0;
+}
+
+static void clearDebugMaskTexture()
+{
+    SAFE_RELEASE(g_maskTex);
+    SAFE_RELEASE(g_maskSRV);
+    maskTexW = 0;
+    maskTexH = 0;
+}
+
+void CleanupDebugDrawResources()
+{
+    clearDebugFrameTexture();
+    clearDebugMaskTexture();
+}
+
 static float debug_scale = 0.5f;
 static int g_timedCaptureIntervalMs = 250;
 static int g_timedCaptureBurstCount = 5;
 static char g_timedCapturePrefix[64] = "";
+static std::mutex g_debugExportStateMutex;
 static std::string g_lastDebugStatus = "No debug export yet.";
 static std::string g_lastDebugPath;
 static std::string g_lastDebugBundleId;
@@ -95,18 +123,22 @@ static void runDebugExport(detection_debug::ExportKind kind)
         std::string outStatus;
         const bool success = detection_debug::QueueBundleExport(snapshot, &outPath, &outStatus, kind);
 
-        g_lastDebugStatus = outStatus.empty()
+        std::string lastDebugStatus = outStatus.empty()
             ? (success ? "Debug export complete" : "Debug export failed")
             : outStatus;
-        g_lastDebugPath = outPath;
-        g_lastDebugBundleId = snapshot.bundleId;
-        g_lastDebugBackend = snapshot.backend;
-        g_lastDebugDetectionCount = static_cast<int>(snapshot.boxes.size());
+        {
+            std::lock_guard<std::mutex> lock(g_debugExportStateMutex);
+            g_lastDebugStatus = lastDebugStatus;
+            g_lastDebugPath = outPath;
+            g_lastDebugBundleId = snapshot.bundleId;
+            g_lastDebugBackend = snapshot.backend;
+            g_lastDebugDetectionCount = static_cast<int>(snapshot.boxes.size());
+        }
 
         detection_debug::AppendEvent(
             success
-                ? std::string("[ManualExport] ") + g_lastDebugStatus + " -> " + outPath
-                : std::string("[ManualExport] failed: ") + g_lastDebugStatus);
+                ? std::string("[ManualExport] ") + lastDebugStatus + " -> " + outPath
+                : std::string("[ManualExport] failed: ") + lastDebugStatus);
     }).detach();
 }
 
@@ -280,16 +312,36 @@ static void uploadMaskFrame(const cv::Mat& rgba)
 
 void draw_debug_frame()
 {
+    const auto inferenceMode = activeInferenceMode.load();
+    const auto sam3Snapshot = training::GetTrainingLatestPreviewOverlaySnapshot();
+    const auto sam3Status = training::GetTrainingRuntimeStatus();
+    const bool labelModeActive = inferenceMode == training::InferenceMode::Label;
+    const bool useSam3LabelPreview =
+        labelModeActive &&
+        sam3Status.backend.ready &&
+        sam3Snapshot.valid;
+
     cv::Mat frameCopy;
-    {
+    if (useSam3LabelPreview) {
+        frameCopy = sam3Snapshot.frame;
+    } else if (!labelModeActive) {
         std::lock_guard<std::mutex> lk(frameMutex);
         if (!latestFrame.empty())
             latestFrame.copyTo(frameCopy);
     }
 
-    uploadDebugFrame(frameCopy);
+    if (frameCopy.empty()) {
+        clearDebugFrameTexture();
+    } else {
+        uploadDebugFrame(frameCopy);
+    }
 
     if (!g_debugSRV) return;
+
+    if (labelModeActive && !useSam3LabelPreview) {
+        ImGui::TextDisabled("Waiting for SAM3 preview snapshot...");
+        return;
+    }
 
     ImGui::SliderFloat("Debug scale", &debug_scale, 0.1f, 2.0f, "%.1fx");
 
@@ -298,9 +350,11 @@ void draw_debug_frame()
 
     ImVec2 image_pos = ImGui::GetItemRectMin();
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 clip_min = image_pos;
+    ImVec2 clip_max(image_pos.x + image_size.x, image_pos.y + image_size.y);
 
 #ifdef USE_CUDA
-    if (config.depth_mask_enabled)
+    if (!labelModeActive && config.depth_mask_enabled)
     {
         auto& depthMask = depth_anything::GetDepthMaskGenerator();
         cv::Mat mask = depthMask.getMask();
@@ -328,7 +382,7 @@ void draw_debug_frame()
     }
 #endif
 
-    {
+    if (!labelModeActive) {
         std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
         for (size_t i = 0; i < detectionBuffer.boxes.size(); ++i)
         {
@@ -351,7 +405,36 @@ void draw_debug_frame()
         }
     }
 
-    if (config.draw_futurePositions && globalMouseThread)
+        if (useSam3LabelPreview) {
+            draw_list->PushClipRect(clip_min, clip_max, true);
+            const float scale_x = image_size.x / static_cast<float>(std::max(1, sam3Snapshot.frame.cols));
+            const float scale_y = image_size.y / static_cast<float>(std::max(1, sam3Snapshot.frame.rows));
+            const bool drawSam3Boxes = ShouldDrawSam3PreviewBoxes(config.training_sam3_draw_preview_boxes);
+            const bool drawSam3Labels = ShouldDrawSam3PreviewConfidenceLabels(
+                config.training_sam3_draw_preview_boxes,
+                config.training_sam3_draw_confidence_labels);
+
+            for (const auto& detection : sam3Snapshot.result.boxes) {
+                const cv::Rect& box = detection.rect;
+                ImVec2 p1(image_pos.x + box.x * scale_x, image_pos.y + box.y * scale_y);
+                ImVec2 p2(image_pos.x + (box.x + box.width) * scale_x,
+                          image_pos.y + (box.y + box.height) * scale_y);
+
+            if (drawSam3Boxes) {
+                draw_list->AddRect(p1, p2, IM_COL32(0, 255, 0, 255), 0.0f, 0, 2.0f);
+            }
+
+            if (drawSam3Labels) {
+                char label[16] = {};
+                snprintf(label, sizeof(label), "%.2f", detection.confidence);
+                const ImVec2 text_pos(p1.x, std::max(image_pos.y, p1.y - 16.0f));
+                draw_list->AddText(text_pos, IM_COL32(255, 255, 255, 255), label);
+            }
+        }
+        draw_list->PopClipRect();
+    }
+
+    if (!labelModeActive && config.draw_futurePositions && globalMouseThread)
     {
         auto futurePts = globalMouseThread->getFuturePositions();
         if (!futurePts.empty())
@@ -359,9 +442,6 @@ void draw_debug_frame()
             float scale_x = static_cast<float>(texW) / config.detection_resolution;
             float scale_y = static_cast<float>(texH) / config.detection_resolution;
 
-            ImVec2 clip_min = image_pos;
-            ImVec2 clip_max = ImVec2(image_pos.x + texW * debug_scale,
-                image_pos.y + texH * debug_scale);
             draw_list->PushClipRect(clip_min, clip_max, true);
 
             int totalPts = static_cast<int>(futurePts.size());
@@ -496,6 +576,7 @@ void draw_debug()
             detection_debug::AppendEvent(
                 std::string("[TimedCapture] started interval=") + std::to_string(request.intervalMs) +
                 "ms burst=" + std::to_string(request.remainingShots));
+            std::lock_guard<std::mutex> lock(g_debugExportStateMutex);
             g_lastDebugStatus = "Timed capture started";
         }
         ImGui::SameLine();
@@ -504,6 +585,7 @@ void draw_debug()
             detection_debug::StopTimedCapture();
             detection_debug::SetTimedCaptureStatus("Timed capture stopped");
             detection_debug::AppendEvent("[TimedCapture] stopped");
+            std::lock_guard<std::mutex> lock(g_debugExportStateMutex);
             g_lastDebugStatus = "Timed capture stopped";
         }
 
@@ -551,11 +633,24 @@ void draw_debug()
 
         ImGui::Separator();
         ImGui::Text("Last Saved");
-        ImGui::TextWrapped("Status: %s", g_lastDebugStatus.c_str());
-        ImGui::TextWrapped("Path: %s", g_lastDebugPath.empty() ? "n/a" : g_lastDebugPath.c_str());
-        ImGui::TextWrapped("Bundle ID: %s", g_lastDebugBundleId.empty() ? "n/a" : g_lastDebugBundleId.c_str());
-        ImGui::TextWrapped("Backend: %s", g_lastDebugBackend.empty() ? "n/a" : g_lastDebugBackend.c_str());
-        ImGui::Text("Detection count: %d", g_lastDebugDetectionCount);
+        std::string lastDebugStatus;
+        std::string lastDebugPath;
+        std::string lastDebugBundleId;
+        std::string lastDebugBackend;
+        int lastDebugDetectionCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_debugExportStateMutex);
+            lastDebugStatus = g_lastDebugStatus;
+            lastDebugPath = g_lastDebugPath;
+            lastDebugBundleId = g_lastDebugBundleId;
+            lastDebugBackend = g_lastDebugBackend;
+            lastDebugDetectionCount = g_lastDebugDetectionCount;
+        }
+        ImGui::TextWrapped("Status: %s", lastDebugStatus.c_str());
+        ImGui::TextWrapped("Path: %s", lastDebugPath.empty() ? "n/a" : lastDebugPath.c_str());
+        ImGui::TextWrapped("Bundle ID: %s", lastDebugBundleId.empty() ? "n/a" : lastDebugBundleId.c_str());
+        ImGui::TextWrapped("Backend: %s", lastDebugBackend.empty() ? "n/a" : lastDebugBackend.c_str());
+        ImGui::Text("Detection count: %d", lastDebugDetectionCount);
 
         OverlayUI::EndSection();
     }

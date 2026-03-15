@@ -118,7 +118,7 @@ static bool ReadFileToBuffer(const std::filesystem::path& path, std::vector<unsi
     return true;
 }
 
-static std::vector<std::string> GetModelFilesByExtInDir(const std::string& dir, const std::vector<std::string>& exts)
+static std::vector<std::string> GetModelFilesByExtInDir(const std::filesystem::path& dir, const std::vector<std::string>& exts)
 {
     std::vector<std::string> files;
 
@@ -154,7 +154,7 @@ static std::vector<std::string> GetModelFilesByExtInDir(const std::string& dir, 
 
 static std::vector<std::string> GetModelFilesByExt(const std::vector<std::string>& exts)
 {
-    return GetModelFilesByExtInDir("models/", exts);
+    return GetModelFilesByExtInDir(GetExecutableModelsDirectory(), exts);
 }
 
 std::string WideToUtf8(const std::wstring& ws)
@@ -369,7 +369,71 @@ std::vector<std::string> getOnnxFiles()
 
 std::vector<std::string> getAvailableDepthModels()
 {
-    return GetModelFilesByExtInDir("models/depth", { ".engine", ".onnx", ".trt", ".plan" });
+    return GetModelFilesByExtInDir(GetExecutableModelsDirectory() / "depth", { ".engine", ".onnx", ".trt", ".plan" });
+}
+
+std::vector<std::string> getAvailableCoreAiModels()
+{
+    std::vector<std::string> availableModels;
+
+    std::vector<std::string> engineFiles = getEngineFiles();
+    std::vector<std::string> onnxFiles = getOnnxFiles();
+
+    engineFiles.erase(
+        std::remove_if(engineFiles.begin(), engineFiles.end(),
+            [](const std::string& file) { return !ShouldIncludeCoreAiModelEntry(file); }),
+        engineFiles.end());
+    onnxFiles.erase(
+        std::remove_if(onnxFiles.begin(), onnxFiles.end(),
+            [](const std::string& file) { return !ShouldIncludeCoreAiModelEntry(file); }),
+        onnxFiles.end());
+
+    if (config.backend == "TRT")
+    {
+        std::set<std::string> engineModels;
+        for (const auto& file : engineFiles)
+        {
+            engineModels.insert(std::filesystem::path(file).stem().string());
+        }
+
+        for (const auto& file : engineFiles)
+        {
+            availableModels.push_back(file);
+        }
+
+        for (const auto& file : onnxFiles)
+        {
+            std::string modelName = std::filesystem::path(file).stem().string();
+            if (engineModels.find(modelName) == engineModels.end())
+            {
+                availableModels.push_back(file);
+            }
+        }
+    }
+    else
+    {
+        for (const auto& file : engineFiles)
+        {
+            availableModels.push_back(file);
+        }
+
+        for (const auto& file : onnxFiles)
+        {
+            availableModels.push_back(file);
+        }
+    }
+
+    return availableModels;
+}
+
+std::vector<std::string> getAvailableSam3Engines()
+{
+    std::vector<std::string> sam3Engines = getEngineFiles();
+    sam3Engines.erase(
+        std::remove_if(sam3Engines.begin(), sam3Engines.end(),
+            [](const std::string& file) { return !ShouldIncludeSam3EngineEntry(file); }),
+        sam3Engines.end());
+    return sam3Engines;
 }
 
 std::vector<std::string>::difference_type getModelIndex(const std::vector<std::string>& engine_models)
@@ -640,47 +704,7 @@ HMONITOR GetMonitorHandleByIndex(int monitorIndex)
 
 std::vector<std::string> getAvailableModels()
 {
-    std::vector<std::string> availableModels;
-
-    std::vector<std::string> engineFiles = getEngineFiles();
-    std::vector<std::string> onnxFiles = getOnnxFiles();
-
-    if (config.backend == "TRT")
-    {
-        std::set<std::string> engineModels;
-        for (const auto& file : engineFiles)
-        {
-            engineModels.insert(std::filesystem::path(file).stem().string());
-        }
-
-        for (const auto& file : engineFiles)
-        {
-            availableModels.push_back(file);
-        }
-
-        for (const auto& file : onnxFiles)
-        {
-            std::string modelName = std::filesystem::path(file).stem().string();
-            if (engineModels.find(modelName) == engineModels.end())
-            {
-                availableModels.push_back(file);
-            }
-        }
-    }
-    else
-    {
-        for (const auto& file : engineFiles)
-        {
-            availableModels.push_back(file);
-        }
-
-        for (const auto& file : onnxFiles)
-        {
-            availableModels.push_back(file);
-        }
-    }
-
-    return availableModels;
+    return getAvailableCoreAiModels();
 }
 
 void SetRandomConsoleTitle()

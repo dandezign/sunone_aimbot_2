@@ -16,6 +16,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
 #include "sunone_aimbot_2/training/training_label_runtime.h"
 #include "sunone_aimbot_2/training/training_dataset_manager.h"
+#include "sunone_aimbot_2/training/training_sam3_runtime.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -81,6 +83,8 @@ cv::Mat getCurrentDetectionSuppressionMask()
 
 namespace
 {
+std::atomic<uint64_t> g_trainingPreviewFrameId{0};
+
 struct CaptureThreadConfig
 {
     std::string capture_method;
@@ -111,6 +115,18 @@ struct CaptureThreadConfig
     std::string training_label_split;
     bool training_label_save_negatives = false;
     std::string training_label_image_format;
+    std::string training_sam3_engine_path;
+    bool training_label_preview_enabled = true;
+    int training_label_preview_interval_ms = 500;
+    float training_sam3_mask_threshold = 0.5f;
+    int training_sam3_min_mask_pixels = 64;
+    float training_sam3_min_confidence = 0.3f;
+    int training_sam3_min_box_width = 20;
+    int training_sam3_min_box_height = 20;
+    float training_sam3_min_mask_fill_ratio = 0.01f;
+    int training_sam3_max_detections = 100;
+    bool training_sam3_draw_preview_boxes = true;
+    bool training_sam3_draw_confidence_labels = true;
 #ifdef USE_CUDA
     bool depth_inference_enabled = false;
     bool depth_mask_enabled = false;
@@ -155,6 +171,18 @@ CaptureThreadConfig SnapshotCaptureConfig()
     snapshot.training_label_split = config.training_label_split;
     snapshot.training_label_save_negatives = config.training_label_save_negatives;
     snapshot.training_label_image_format = config.training_label_image_format;
+    snapshot.training_sam3_engine_path = config.training_sam3_engine_path;
+    snapshot.training_label_preview_enabled = config.training_label_preview_enabled;
+    snapshot.training_label_preview_interval_ms = config.training_label_preview_interval_ms;
+    snapshot.training_sam3_mask_threshold = config.training_sam3_mask_threshold;
+    snapshot.training_sam3_min_mask_pixels = config.training_sam3_min_mask_pixels;
+    snapshot.training_sam3_min_confidence = config.training_sam3_min_confidence;
+    snapshot.training_sam3_min_box_width = config.training_sam3_min_box_width;
+    snapshot.training_sam3_min_box_height = config.training_sam3_min_box_height;
+    snapshot.training_sam3_min_mask_fill_ratio = config.training_sam3_min_mask_fill_ratio;
+    snapshot.training_sam3_max_detections = config.training_sam3_max_detections;
+    snapshot.training_sam3_draw_preview_boxes = config.training_sam3_draw_preview_boxes;
+    snapshot.training_sam3_draw_confidence_labels = config.training_sam3_draw_confidence_labels;
 
 #ifdef USE_CUDA
     snapshot.depth_inference_enabled = config.depth_inference_enabled;
@@ -435,6 +463,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         {
             clearCaptureFrames();
             clearDetections();
+            training::InvalidateTrainingPreviewSnapshot();
             frameCV.notify_one();
         };
 
@@ -597,8 +626,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 screenshotEnabled &&
                 isAnyKeyPressed(currentCfg.screenshot_button) &&
                 screenshotElapsedMs >= currentCfg.screenshot_delay;
+            const bool trainingPreviewNeeded =
+                training::ShouldRouteFrameToTrainingRuntime(activeInferenceMode.load());
+            const bool trainingSaveNeeded =
+                currentCfg.training_label_enabled &&
+                !currentCfg.training_label_hotkey.empty() &&
+                currentCfg.training_label_hotkey[0] != "None";
 #ifdef USE_CUDA
-            const bool needCpuCopyFromGpu = screenshotRequested || currentCfg.show_window;
+            const bool needCpuCopyFromGpu =
+                screenshotRequested || currentCfg.show_window || trainingPreviewNeeded || trainingSaveNeeded;
 #endif
 
             cv::Mat screenshotCpu;
@@ -884,6 +920,40 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 }
             }
 
+            // Training label runtime - submit preview frames when in Label mode
+            {
+                const auto inferenceMode = activeInferenceMode.load();
+                const auto exePath = GetCurrentExecutablePath();
+                const auto trainingRoot = training::DatasetManager::GetTrainingRootForExe(exePath);
+                static training::DatasetManager staticMgr(trainingRoot);
+                staticMgr.EnsureLayout();
+                training::EnsureTrainingRuntimeInitialized(&staticMgr);
+
+                training::TrainingRuntimeSettings settings;
+                settings.enginePath = currentCfg.training_sam3_engine_path;
+                settings.prompt = currentCfg.training_label_prompt;
+                settings.postprocess.maskThreshold = currentCfg.training_sam3_mask_threshold;
+                settings.postprocess.minMaskPixels = currentCfg.training_sam3_min_mask_pixels;
+                settings.postprocess.minConfidence = currentCfg.training_sam3_min_confidence;
+                settings.postprocess.minBoxWidth = currentCfg.training_sam3_min_box_width;
+                settings.postprocess.minBoxHeight = currentCfg.training_sam3_min_box_height;
+                settings.postprocess.minMaskFillRatio = currentCfg.training_sam3_min_mask_fill_ratio;
+                settings.postprocess.maxDetections = currentCfg.training_sam3_max_detections;
+                settings.previewEnabled = currentCfg.training_label_preview_enabled;
+                settings.previewIntervalMs = currentCfg.training_label_preview_interval_ms;
+                training::UpdateTrainingRuntimeSettings(settings);
+                training::UpdateTrainingRuntimeMode(inferenceMode);
+
+                if (training::ShouldRouteFrameToTrainingRuntime(inferenceMode) && !screenshotCpu.empty()) {
+                    training::Sam3InferenceRequest previewRequest;
+                    previewRequest.frame = screenshotCpu;
+                    previewRequest.prompt = currentCfg.training_label_prompt;
+                    previewRequest.postprocess = settings.postprocess;
+                    previewRequest.frameId = g_trainingPreviewFrameId.fetch_add(1, std::memory_order_relaxed) + 1;
+                    training::SubmitTrainingPreviewFrame(previewRequest);
+                }
+            }
+
             // Training label hotkey detection
             static std::chrono::steady_clock::time_point lastTrainingLabelTime;
             const bool trainingLabelEnabled = currentCfg.training_label_enabled;
@@ -910,23 +980,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                                 training::DatasetSplit::Train;
                 request.saveNegatives = currentCfg.training_label_save_negatives;
                 request.imageFormat = currentCfg.training_label_image_format;
+                request.sam3Postprocess.maskThreshold = currentCfg.training_sam3_mask_threshold;
+                request.sam3Postprocess.minMaskPixels = currentCfg.training_sam3_min_mask_pixels;
+                request.sam3Postprocess.minConfidence = currentCfg.training_sam3_min_confidence;
+                request.sam3Postprocess.minBoxWidth = currentCfg.training_sam3_min_box_width;
+                request.sam3Postprocess.minBoxHeight = currentCfg.training_sam3_min_box_height;
+                request.sam3Postprocess.minMaskFillRatio = currentCfg.training_sam3_min_mask_fill_ratio;
+                request.sam3Postprocess.maxDetections = currentCfg.training_sam3_max_detections;
 
-                const auto exePath = std::filesystem::current_path() / "ai.exe";
-                const auto trainingRoot = training::DatasetManager::GetTrainingRootForExe(exePath);
-                training::DatasetManager mgr(trainingRoot);
-                mgr.EnsureLayout();
-                
-                // Load or create class catalog if needed
-                auto classes = mgr.LoadClasses();
-                if (classes.empty() || std::find(classes.begin(), classes.end(), request.className) == classes.end())
-                {
-                    // Add new class if not exists
-                    classes.push_back(request.className);
-                    mgr.SaveClasses(classes);
-                }
-
-                static training::RuntimeManager runtime(mgr);
-                if (!runtime.EnqueueSave(request))
+                if (!training::EnqueueTrainingSave(request))
                 {
                     // Queue full - silently drop (status shown in UI)
                 }
@@ -968,7 +1030,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
     }
     catch (const std::exception& e)
     {
+        training::ShutdownTrainingRuntime();
         std::cerr << "[Capture] Unhandled exception: " << e.what() << std::endl;
         throw;
     }
+
+    training::ShutdownTrainingRuntime();
 }

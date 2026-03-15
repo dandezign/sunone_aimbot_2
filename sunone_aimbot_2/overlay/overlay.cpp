@@ -58,7 +58,7 @@ extern std::atomic<bool> shouldExit;
 
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
-void CreateRenderTarget();
+bool CreateRenderTarget();
 void CleanupRenderTarget();
 
 ID3D11BlendState* g_pBlendState = nullptr;
@@ -97,7 +97,6 @@ static void EnsureOverlayInsideWorkArea(HWND hwnd);
 
 void load_body_texture();
 void release_body_texture();
-std::vector<std::string> getAvailableModels();
 
 static inline int ClampInt(int v, int lo, int hi)
 {
@@ -601,16 +600,26 @@ bool CreateDeviceD3D(HWND hWnd)
     if (!InitializeBlendState())
         return false;
 
-    CreateRenderTarget();
-    return true;
+    return CreateRenderTarget();
 }
 
-void CreateRenderTarget()
+bool CreateRenderTarget()
 {
+    if (!g_pSwapChain || !g_pd3dDevice)
+    {
+        return false;
+    }
+
     ID3D11Texture2D* pBackBuffer = NULL;
-    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
+    const HRESULT getBufferResult = g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (FAILED(getBufferResult) || !pBackBuffer)
+    {
+        return false;
+    }
+
+    const HRESULT createViewResult = g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
     pBackBuffer->Release();
+    return SUCCEEDED(createViewResult) && g_mainRenderTargetView != NULL;
 }
 
 void CleanupRenderTarget()
@@ -620,6 +629,7 @@ void CleanupRenderTarget()
 
 void CleanupDeviceD3D()
 {
+    CleanupDebugDrawResources();
     CleanupRenderTarget();
 
     if (g_dcompVisual) { g_dcompVisual->Release(); g_dcompVisual = NULL; }
@@ -646,6 +656,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             const UINT dpi = GetDpiForWindowSafe(hWnd);
             const int border = ::MulDiv(RESIZE_BORDER_PX, (int)dpi, 96);
+            const int dragBarHeight = ::MulDiv(DRAG_BAR_HEIGHT_PX, (int)dpi, 96);
             const bool left = pt.x < rc.left + border;
             const bool right = pt.x >= rc.right - border;
             const bool top = pt.y < rc.top + border;
@@ -660,7 +671,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (top) return HTTOP;
             if (bottom) return HTBOTTOM;
 
-            if (pt.y >= rc.top && pt.y < rc.top + DRAG_BAR_HEIGHT_PX)
+            if (pt.y >= rc.top && pt.y < rc.top + dragBarHeight)
                 return HTCAPTION;
 
             return HTCLIENT;
@@ -710,8 +721,15 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             overlayHeight = (int)height;
 
             CleanupRenderTarget();
-            g_pSwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-            CreateRenderTarget();
+            if (SUCCEEDED(g_pSwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0)))
+            {
+                if (!CreateRenderTarget())
+                    shouldExit = true;
+            }
+            else
+            {
+                shouldExit = true;
+            }
             if (g_dcompDevice) g_dcompDevice->Commit();
         }
         return 0;
@@ -851,7 +869,7 @@ void OverlayThread()
     for (const auto& name : key_names)
         key_names_cstrs.push_back(name.c_str());
 
-    availableModels = getAvailableModels();
+    availableModels = getAvailableCoreAiModels();
 
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));

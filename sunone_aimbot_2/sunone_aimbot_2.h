@@ -12,6 +12,7 @@
 #include "KmboxNetConnection.h"
 #include "KmboxAConnection.h"
 #include "Makcu.h"
+#include "training/training_inference_mode.h"
 #include <mutex>
 
 extern Config config;
@@ -29,6 +30,7 @@ extern std::atomic<bool> input_method_changed;
 extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
+extern std::atomic<training::InferenceMode> activeInferenceMode;
 extern std::mutex configMutex;
 
 #endif // SUNONE_AIMBOT_2_H

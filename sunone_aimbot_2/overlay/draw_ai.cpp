@@ -83,7 +83,7 @@ void draw_ai()
         ImGui::EndPopup();
     }
 #endif
-    std::vector<std::string> availableModels = getAvailableModels();
+    std::vector<std::string> availableModels = getAvailableCoreAiModels();
     if (OverlayUI::BeginSection("Model", "ai_section_model"))
     {
         if (availableModels.empty())

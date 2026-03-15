@@ -183,6 +183,7 @@ set(AIMBOT_SOURCES
     "${SRC_DIR}/sunone_aimbot_2.cpp"
     "${SRC_DIR}/training/training_dataset_manager.cpp"
     "${SRC_DIR}/training/training_label_runtime.cpp"
+    "${SRC_DIR}/training/training_sam3_runtime.cpp"
 )
 
 if(AIMBOT_USE_CUDA)
@@ -453,12 +454,18 @@ endif()
 
 add_executable(training_labeling_tests
     "${CMAKE_SOURCE_DIR}/tests/training_labeling_tests.cpp"
+    "${SRC_DIR}/config/config.cpp"
     "${SRC_DIR}/training/training_dataset_manager.cpp"
     "${SRC_DIR}/training/training_label_runtime.cpp"
+    "${SRC_DIR}/training/training_sam3_runtime.cpp"
 )
 
-if(NOT AIMBOT_USE_CUDA)
-    list(APPEND AIMBOT_SOURCES
+if(AIMBOT_USE_CUDA)
+    target_sources(training_labeling_tests PRIVATE
+        "${SRC_DIR}/training/training_sam3_labeler_trt.cpp"
+    )
+else()
+    target_sources(training_labeling_tests PRIVATE
         "${SRC_DIR}/training/training_sam3_labeler_stub.cpp"
     )
 endif()
@@ -475,9 +482,35 @@ target_compile_definitions(training_labeling_tests PRIVATE
     _CONSOLE
 )
 
+if(AIMBOT_USE_CUDA)
+    target_compile_definitions(training_labeling_tests PRIVATE USE_CUDA)
+
+    set(SAM3_TRAINING_LABELING_TEST_ENGINE_FIXTURE
+        "${CMAKE_SOURCE_DIR}/models/sam3_fp16.engine")
+    if(EXISTS "${SAM3_TRAINING_LABELING_TEST_ENGINE_FIXTURE}")
+        target_compile_definitions(training_labeling_tests PRIVATE
+            TRAINING_LABELING_TESTS_HAS_SAM3_ENGINE_FIXTURE
+            TRAINING_LABELING_TESTS_SAM3_ENGINE_PATH="${SAM3_TRAINING_LABELING_TEST_ENGINE_FIXTURE}"
+        )
+    endif()
+endif()
+
 target_link_libraries(training_labeling_tests PRIVATE
     "${AIMBOT_OPENCV_LIBRARY}"
 )
+
+if(AIMBOT_USE_CUDA)
+    target_include_directories(training_labeling_tests PRIVATE
+        "${AIMBOT_TENSORRT_ROOT}/include"
+    )
+    target_link_directories(training_labeling_tests PRIVATE "${AIMBOT_TENSORRT_ROOT}/lib")
+    target_link_libraries(training_labeling_tests PRIVATE
+        CUDA::cuda_driver
+        CUDA::cudart
+        nvinfer_10
+        nvonnxparser_10
+    )
+endif()
 
 if(MSVC)
     target_compile_options(training_labeling_tests PRIVATE

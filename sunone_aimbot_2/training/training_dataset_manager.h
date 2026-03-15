@@ -12,6 +12,7 @@ namespace training {
 struct DetectionBox {
     int classId;
     cv::Rect rect;
+    float confidence = 0.0f;  // Detection confidence score (0.0 - 1.0)
 };
 
 struct YoloRow {

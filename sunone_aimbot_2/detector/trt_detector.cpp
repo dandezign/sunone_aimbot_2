@@ -29,7 +29,6 @@
 #include "detector/yolo26_decode.h"
 #include "sunone_aimbot_2/debug/detection_debug_state.h"
 
-extern std::atomic<bool> detectionPaused;
 int model_quant;
 std::vector<float> outputData;
 
@@ -639,11 +638,9 @@ void TrtDetector::processFrame(const cv::Mat& frame)
 {
     if (config.backend == "DML") return;
 
-    if (detectionPaused)
+    if (!training::ShouldDetectorProcessFrames(activeInferenceMode.load()))
     {
-        std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
-        detectionBuffer.boxes.clear();
-        detectionBuffer.classes.clear();
+        training::ClearDetectorStateForInactiveMode();
         return;
     }
 
@@ -659,11 +656,9 @@ void TrtDetector::processFrameGpu(const cv::cuda::GpuMat& frame)
 {
     if (config.backend == "DML") return;
 
-    if (detectionPaused)
+    if (!training::ShouldDetectorProcessFrames(activeInferenceMode.load()))
     {
-        std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
-        detectionBuffer.boxes.clear();
-        detectionBuffer.classes.clear();
+        training::ClearDetectorStateForInactiveMode();
         return;
     }
 
@@ -973,7 +968,7 @@ void TrtDetector::decodeOutputs(const float* output, const std::string& outputNa
     // Publish debug snapshot after YOLO26 decode
     detection_debug::DetectorSnapshot debugSnapshot;
     debugSnapshot.backend = "TRT";
-    debugSnapshot.modelPath = inputName;
+    debugSnapshot.modelPath = "models/" + config.ai_model;
     debugSnapshot.detectorTimestampUtc = detection_debug::MakeUtcTimestamp();
     debugSnapshot.detectorInputWidth = gameWidth;
     debugSnapshot.detectorInputHeight = gameHeight;

@@ -40,6 +40,7 @@ std::condition_variable frameCV;
 std::atomic<bool> shouldExit(false);
 std::atomic<bool> aiming(false);
 std::atomic<bool> detectionPaused(false);
+std::atomic<training::InferenceMode> activeInferenceMode(training::InferenceMode::Detect);
 std::mutex configMutex;
 
 #ifdef USE_CUDA

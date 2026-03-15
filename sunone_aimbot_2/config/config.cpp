@@ -13,6 +13,12 @@
 #include "config.h"
 #include "modules/SimpleIni.h"
 
+namespace {
+
+constexpr const char* kDefaultTrainingSam3EnginePath = "models/sam3_fp16.engine";
+
+}
+
 std::vector<std::string> Config::splitString(const std::string& str, char delimiter)
 {
     std::vector<std::string> tokens;
@@ -250,6 +256,7 @@ bool Config::loadConfig(const std::string& filename)
 
         // Training - Label
         training_label_enabled = false;
+        training_inference_mode = "detect";
         training_label_hotkey = splitString("F8");
         training_label_prompt = "";
         training_label_class = "player";
@@ -258,7 +265,16 @@ bool Config::loadConfig(const std::string& filename)
         training_label_image_format = ".jpg";
         training_label_preview_enabled = true;
         training_label_preview_interval_ms = 500;
-        training_sam3_engine_path = "";
+        training_sam3_engine_path = kDefaultTrainingSam3EnginePath;
+        training_sam3_mask_threshold = 0.5f;
+        training_sam3_min_mask_pixels = 64;
+        training_sam3_min_confidence = 0.3f;
+        training_sam3_min_box_width = 20;
+        training_sam3_min_box_height = 20;
+        training_sam3_min_mask_fill_ratio = 0.01f;
+        training_sam3_max_detections = 100;
+        training_sam3_draw_preview_boxes = true;
+        training_sam3_draw_confidence_labels = true;
 
         // Game profiles
         game_profiles.clear();
@@ -595,15 +611,65 @@ bool Config::loadConfig(const std::string& filename)
 
     // Training - Label
     training_label_enabled = get_bool("training_label_enabled", false);
+    training_inference_mode = get_string("training_inference_mode", "detect");
+    std::transform(training_inference_mode.begin(), training_inference_mode.end(),
+                   training_inference_mode.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (training_inference_mode != "detect"
+        && training_inference_mode != "label"
+        && training_inference_mode != "paused") {
+        training_inference_mode = "detect";
+    }
     training_label_hotkey = splitString(get_string("training_label_hotkey", "F8"));
     training_label_prompt = get_string("training_label_prompt", "");
     training_label_class = get_string("training_label_class", "player");
     training_label_split = get_string("training_label_split", "train");
+    std::transform(training_label_split.begin(), training_label_split.end(),
+                   training_label_split.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (training_label_split != "train" && training_label_split != "val") {
+        training_label_split = "train";
+    }
     training_label_save_negatives = get_bool("training_label_save_negatives", false);
     training_label_image_format = get_string("training_label_image_format", ".jpg");
+    std::transform(training_label_image_format.begin(), training_label_image_format.end(),
+                   training_label_image_format.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (training_label_image_format != ".jpg" && training_label_image_format != ".png") {
+        training_label_image_format = ".jpg";
+    }
     training_label_preview_enabled = get_bool("training_label_preview_enabled", true);
     training_label_preview_interval_ms = get_long("training_label_preview_interval_ms", 500);
-    training_sam3_engine_path = get_string("training_sam3_engine_path", "");
+    if (training_label_preview_interval_ms < 100)
+        training_label_preview_interval_ms = 100;
+    if (training_label_preview_interval_ms > 2000)
+        training_label_preview_interval_ms = 2000;
+    training_sam3_engine_path = get_string("training_sam3_engine_path", kDefaultTrainingSam3EnginePath);
+    if (training_sam3_engine_path.empty())
+        training_sam3_engine_path = kDefaultTrainingSam3EnginePath;
+    training_sam3_mask_threshold = (float)get_double("training_sam3_mask_threshold", 0.5);
+    if (training_sam3_mask_threshold < 0.0f) training_sam3_mask_threshold = 0.0f;
+    if (training_sam3_mask_threshold > 1.0f) training_sam3_mask_threshold = 1.0f;
+    training_sam3_min_mask_pixels = get_long("training_sam3_min_mask_pixels", 64);
+    if (training_sam3_min_mask_pixels < 0) training_sam3_min_mask_pixels = 0;
+    if (training_sam3_min_mask_pixels > 1000000) training_sam3_min_mask_pixels = 1000000;
+    training_sam3_min_confidence = (float)get_double("training_sam3_min_confidence", 0.3);
+    if (training_sam3_min_confidence < 0.0f) training_sam3_min_confidence = 0.0f;
+    if (training_sam3_min_confidence > 1.0f) training_sam3_min_confidence = 1.0f;
+    training_sam3_min_box_width = get_long("training_sam3_min_box_width", 20);
+    if (training_sam3_min_box_width < 1) training_sam3_min_box_width = 1;
+    if (training_sam3_min_box_width > 4096) training_sam3_min_box_width = 4096;
+    training_sam3_min_box_height = get_long("training_sam3_min_box_height", 20);
+    if (training_sam3_min_box_height < 1) training_sam3_min_box_height = 1;
+    if (training_sam3_min_box_height > 4096) training_sam3_min_box_height = 4096;
+    training_sam3_min_mask_fill_ratio = (float)get_double("training_sam3_min_mask_fill_ratio", 0.01);
+    if (training_sam3_min_mask_fill_ratio < 0.0f) training_sam3_min_mask_fill_ratio = 0.0f;
+    if (training_sam3_min_mask_fill_ratio > 1.0f) training_sam3_min_mask_fill_ratio = 1.0f;
+    training_sam3_max_detections = get_long("training_sam3_max_detections", 100);
+    if (training_sam3_max_detections < 1) training_sam3_max_detections = 1;
+    if (training_sam3_max_detections > 1000) training_sam3_max_detections = 1000;
+    training_sam3_draw_preview_boxes = get_bool("training_sam3_draw_preview_boxes", true);
+    training_sam3_draw_confidence_labels = get_bool("training_sam3_draw_confidence_labels", true);
 
     return true;
 }
@@ -843,6 +909,7 @@ bool Config::saveConfig(const std::string& filename)
     // Training - Label
     file << "# Training - Label\n"
         << "training_label_enabled = " << (training_label_enabled ? "true" : "false") << "\n"
+        << "training_inference_mode = " << training_inference_mode << "\n"
         << "training_label_hotkey = " << joinStrings(training_label_hotkey) << "\n"
         << "training_label_prompt = " << training_label_prompt << "\n"
         << "training_label_class = " << training_label_class << "\n"
@@ -851,7 +918,17 @@ bool Config::saveConfig(const std::string& filename)
         << "training_label_image_format = " << training_label_image_format << "\n"
         << "training_label_preview_enabled = " << (training_label_preview_enabled ? "true" : "false") << "\n"
         << "training_label_preview_interval_ms = " << training_label_preview_interval_ms << "\n"
-        << "training_sam3_engine_path = " << training_sam3_engine_path << "\n\n";
+        << "training_sam3_engine_path = " << training_sam3_engine_path << "\n"
+        << std::fixed << std::setprecision(2)
+        << "training_sam3_mask_threshold = " << training_sam3_mask_threshold << "\n"
+        << "training_sam3_min_mask_pixels = " << training_sam3_min_mask_pixels << "\n"
+        << "training_sam3_min_confidence = " << training_sam3_min_confidence << "\n"
+        << "training_sam3_min_box_width = " << training_sam3_min_box_width << "\n"
+        << "training_sam3_min_box_height = " << training_sam3_min_box_height << "\n"
+        << "training_sam3_min_mask_fill_ratio = " << training_sam3_min_mask_fill_ratio << "\n"
+        << "training_sam3_max_detections = " << training_sam3_max_detections << "\n"
+        << "training_sam3_draw_preview_boxes = " << (training_sam3_draw_preview_boxes ? "true" : "false") << "\n"
+        << "training_sam3_draw_confidence_labels = " << (training_sam3_draw_confidence_labels ? "true" : "false") << "\n\n";
 
     // Active game
     file << "# Active game profile\n";

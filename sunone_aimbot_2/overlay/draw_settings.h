@@ -13,6 +13,7 @@ void draw_debug();
 void draw_depth();
 void load_body_texture();
 void release_body_texture();
+void CleanupDebugDrawResources();
 void draw_game_overlay_settings();
 void draw_training();
 
