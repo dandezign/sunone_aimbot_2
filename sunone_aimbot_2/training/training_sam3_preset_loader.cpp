@@ -2,11 +2,119 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
+#include <cstdio>
+#include <sstream>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace training {
+
+namespace {
+constexpr int64_t kPromptLength = 32;
+constexpr int64_t kPadToken = 49407;
+constexpr int64_t kBosToken = 49406;
+#ifndef SAM3_DEFAULT_TOKENIZER_SCRIPT
+#define SAM3_DEFAULT_TOKENIZER_SCRIPT "SAM3TensorRT/python/tokenize_prompt.py"
+#endif
+
+std::string trim_copy(const std::string& s) {
+    const auto begin = s.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(begin, end - begin + 1);
+}
+
+std::string shell_quote(const std::string& s) {
+    std::string out = "\"";
+    for (char ch : s) {
+        if (ch == '"') {
+            out += "\\\"";
+        } else {
+            out += ch;
+        }
+    }
+    out += "\"";
+    return out;
+}
+
+std::string normalize_windows_path(std::string s) {
+#ifdef _WIN32
+    std::replace(s.begin(), s.end(), '/', '\\');
+#endif
+    return s;
+}
+
+bool parse_ids_csv(const std::string& csv, std::vector<int64_t>& parsed) {
+    std::stringstream ss(csv);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.empty()) {
+            continue;
+        }
+
+        size_t processed = 0;
+        long long value = 0;
+        try {
+            value = std::stoll(item, &processed);
+        } catch (const std::exception&) {
+            return false;
+        }
+
+        if (processed != item.size()) {
+            return false;
+        }
+
+        parsed.push_back(static_cast<int64_t>(value));
+    }
+
+    return !parsed.empty();
+}
+
+bool parse_mask_csv(const std::string& csv, std::vector<int64_t>& mask) {
+    std::vector<int64_t> parsed;
+    if (!parse_ids_csv(csv, parsed)) {
+        return false;
+    }
+
+    for (int64_t v : parsed) {
+        if (v != 0 && v != 1) {
+            return false;
+        }
+    }
+
+    mask = std::move(parsed);
+    return true;
+}
+
+bool run_command_capture(const std::string& command, std::string& output) {
+#ifdef _WIN32
+    FILE* pipe = _popen(command.c_str(), "r");
+#else
+    FILE* pipe = popen(command.c_str(), "r");
+#endif
+    if (!pipe) {
+        return false;
+    }
+
+    char buffer[512];
+    output.clear();
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output += buffer;
+    }
+
+#ifdef _WIN32
+    const int code = _pclose(pipe);
+#else
+    const int code = pclose(pipe);
+#endif
+
+    return code == 0;
+}
+}  // namespace
 
 Sam3PresetLoader::Sam3PresetLoader()
     : lastModified_{} {
@@ -196,6 +304,69 @@ bool Sam3PresetLoader::ValidatePreset(const std::string& name, const Sam3PromptP
         return false;
     }
 
+    return true;
+}
+
+bool Sam3PresetLoader::TokenizeWithPython(const std::string& prompt,
+                                          int tokenCount,
+                                          std::vector<int64_t>& inputIds,
+                                          std::vector<int64_t>& attentionMask) {
+    const char* python_env = std::getenv("SAM3_TOKENIZER_PYTHON");
+    const char* script_env = std::getenv("SAM3_TOKENIZER_SCRIPT");
+
+    const std::string python_cmd =
+        (python_env && *python_env) ? std::string(python_env) : "python";
+    const std::string script_path =
+        (script_env && *script_env) ? std::string(script_env)
+                                    : std::string(SAM3_DEFAULT_TOKENIZER_SCRIPT);
+
+    const std::string python_cmd_norm = normalize_windows_path(python_cmd);
+    const std::string script_path_norm = normalize_windows_path(script_path);
+
+#ifdef _WIN32
+    const std::string command = python_cmd_norm + " " + script_path_norm +
+                                " --text " + shell_quote(prompt) +
+                                " --max-length " + std::to_string(tokenCount);
+#else
+    const std::string command = shell_quote(python_cmd_norm) + " " +
+                                shell_quote(script_path_norm) + " --text " +
+                                shell_quote(prompt) + " --max-length " +
+                                std::to_string(tokenCount);
+#endif
+
+    std::string output;
+    if (!run_command_capture(command, output)) {
+        return false;
+    }
+
+    std::stringstream ss(output);
+    std::string line;
+    std::string ids_line;
+    std::string mask_line;
+
+    while (std::getline(ss, line)) {
+        line = trim_copy(line);
+        if (line.rfind("IDS:", 0) == 0) {
+            ids_line = line.substr(4);
+        } else if (line.rfind("MASK:", 0) == 0) {
+            mask_line = line.substr(5);
+        }
+    }
+
+    std::vector<int64_t> parsed_ids;
+    std::vector<int64_t> parsed_mask;
+    if (!parse_ids_csv(ids_line, parsed_ids) ||
+        !parse_mask_csv(mask_line, parsed_mask)) {
+        return false;
+    }
+
+    if (parsed_ids.size() != static_cast<size_t>(tokenCount) ||
+        parsed_mask.size() != static_cast<size_t>(tokenCount)) {
+        return false;
+    }
+
+    inputIds = std::move(parsed_ids);
+    attentionMask = std::move(parsed_mask);
     return true;
 }
 

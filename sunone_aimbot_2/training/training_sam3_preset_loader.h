@@ -23,6 +23,11 @@ public:
     const std::string& GetError() const { return lastError_; }
     bool IsLoaded() const { return !presets_.empty(); }
 
+    bool TokenizeWithPython(const std::string& prompt,
+                            int tokenCount,
+                            std::vector<int64_t>& inputIds,
+                            std::vector<int64_t>& attentionMask);
+
 private:
     bool ParseJsonFile(const std::filesystem::path& path);
     bool ValidatePreset(const std::string& name, const Sam3PromptPreset& preset);
