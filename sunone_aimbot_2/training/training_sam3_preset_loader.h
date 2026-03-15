@@ -32,7 +32,7 @@ private:
     bool ParseJsonFile(const std::filesystem::path& path);
     bool ValidatePreset(const std::string& name, const Sam3PromptPreset& preset);
 
-    std::unordered_map<std::string, Sam3PromptPreset> presets_;
+    mutable std::unordered_map<std::string, Sam3PromptPreset> presets_;
     std::filesystem::path presetPath_;
     std::filesystem::file_time_type lastModified_;
     bool hotReloadEnabled_ = true;

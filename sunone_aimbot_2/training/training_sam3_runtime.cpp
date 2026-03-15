@@ -3,11 +3,8 @@
 #include <chrono>
 
 #include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
+#include "sunone_aimbot_2/sunone_aimbot_2.h"
 #include "sunone_aimbot_2/include/other_tools.h"
-
-#include "sunone_aimbot_2/config/config.h"
-
-extern Config config;
 
 namespace training {
 
@@ -754,8 +751,6 @@ namespace {
 std::shared_ptr<training::TrainingSam3Runtime> g_sharedRuntime;
 std::mutex g_sharedRuntimeMutex;
 
-training::Sam3PresetLoader g_presetLoader;
-
 class Sam3PreviewBackendAdapter final : public training::ISam3PreviewBackend {
 public:
     bool Initialize(const std::string& enginePath) override {
@@ -884,7 +879,7 @@ void ShutdownTrainingRuntime() {
     }
 }
 
-const Sam3PresetLoader* GetTrainingPresetLoader() {
+Sam3PresetLoader* GetTrainingPresetLoader() {
     static bool initialized = false;
     static std::mutex initMutex;
     
@@ -893,7 +888,7 @@ const Sam3PresetLoader* GetTrainingPresetLoader() {
         if (!initialized) {
             const auto exePath = GetCurrentExecutablePath();
             const auto trainingRoot = DatasetManager::GetTrainingRootForExe(exePath);
-            const auto presetPath = trainingRoot / "presets" / config.training_sam3_preset_file;
+            const auto presetPath = trainingRoot / std::filesystem::path("presets") / config.training_sam3_preset_file;
             g_presetLoader.LoadFromFile(presetPath);
             g_presetLoader.EnableHotReload(config.training_sam3_preset_hot_reload);
             initialized = true;

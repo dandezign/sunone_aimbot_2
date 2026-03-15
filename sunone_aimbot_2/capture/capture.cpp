@@ -41,6 +41,7 @@
 #include "sunone_aimbot_2/training/training_label_runtime.h"
 #include "sunone_aimbot_2/training/training_dataset_manager.h"
 #include "sunone_aimbot_2/training/training_sam3_runtime.h"
+#include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -994,6 +995,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 }
 
                 lastTrainingLabelTime = trainingLabelNow;
+            }
+
+            // Training preset hot reload check
+            if (config.training_sam3_preset_hot_reload) {
+                if (auto* loader = training::GetTrainingPresetLoader()) {
+                    if (loader->CheckForChanges()) {
+                        std::cout << "[Capture] Preset file reloaded" << std::endl;
+                    }
+                }
             }
 
             captureFrameCount++;
