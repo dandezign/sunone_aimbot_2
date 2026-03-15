@@ -2,8 +2,18 @@
 
 #include <chrono>
 
+#include "sunone_aimbot_2/training/training_sam3_preset_loader.h"
+#include "sunone_aimbot_2/include/other_tools.h"
+
+#include "sunone_aimbot_2/config/config.h"
+
+extern Config config;
+
 namespace training {
+
 namespace {
+
+Sam3PresetLoader g_presetLoader;
 
 SaveResult DefaultSaveProcessor(DatasetManager& datasetMgr,
                                 const QueuedSaveRequest& request,
@@ -244,6 +254,7 @@ void TrainingSam3Runtime::UpdateSettings(const TrainingRuntimeSettings& settings
     {
         std::unique_lock<std::mutex> lock(mutex_);
         const bool engineChanged = settings.enginePath != settings_.enginePath;
+        const bool presetChanged = settings.prompt != settings_.prompt;
 
         const bool previewDisabled = settings_.previewEnabled && !settings.previewEnabled;
 
@@ -260,6 +271,17 @@ void TrainingSam3Runtime::UpdateSettings(const TrainingRuntimeSettings& settings
                 : Sam3Availability{false, "Reinitializing SAM3 backend"};
             status_.backendOwningInference = false;
             notifyWorker = initRequested_;
+        } else if (presetChanged && status_.backend.ready) {
+            WaitForSaveWriteToFinishLocked(lock);
+            settings_ = settings;
+            ++generation_;
+            initRequested_ = true;
+            InvalidatePreviewStateLocked();
+            ResetSaveStateLocked();
+            backendToShutdown = std::move(backend_);
+            status_.backend = {false, "Reinitializing SAM3 backend on preset change"};
+            status_.backendOwningInference = false;
+            notifyWorker = true;
         } else {
             settings_ = settings;
             if (previewDisabled) {
@@ -732,6 +754,8 @@ namespace {
 std::shared_ptr<training::TrainingSam3Runtime> g_sharedRuntime;
 std::mutex g_sharedRuntimeMutex;
 
+training::Sam3PresetLoader g_presetLoader;
+
 class Sam3PreviewBackendAdapter final : public training::ISam3PreviewBackend {
 public:
     bool Initialize(const std::string& enginePath) override {
@@ -858,6 +882,25 @@ void ShutdownTrainingRuntime() {
     if (runtime) {
         runtime->Shutdown();
     }
+}
+
+const Sam3PresetLoader* GetTrainingPresetLoader() {
+    static bool initialized = false;
+    static std::mutex initMutex;
+    
+    if (!initialized) {
+        std::lock_guard<std::mutex> lock(initMutex);
+        if (!initialized) {
+            const auto exePath = GetCurrentExecutablePath();
+            const auto trainingRoot = DatasetManager::GetTrainingRootForExe(exePath);
+            const auto presetPath = trainingRoot / "presets" / config.training_sam3_preset_file;
+            g_presetLoader.LoadFromFile(presetPath);
+            g_presetLoader.EnableHotReload(config.training_sam3_preset_hot_reload);
+            initialized = true;
+        }
+    }
+    
+    return &g_presetLoader;
 }
 
 }  // namespace training

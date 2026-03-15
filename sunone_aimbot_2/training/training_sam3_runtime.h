@@ -133,4 +133,6 @@ void SubmitTrainingPreviewFrame(const Sam3InferenceRequest& request);
 bool EnqueueTrainingSave(const QueuedSaveRequest& request);
 void ShutdownTrainingRuntime();
 
+const Sam3PresetLoader* GetTrainingPresetLoader();
+
 }  // namespace training
