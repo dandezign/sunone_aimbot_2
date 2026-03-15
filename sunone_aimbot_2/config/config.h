@@ -229,6 +229,10 @@ public:
     int training_sam3_max_detections;
     bool training_sam3_draw_preview_boxes;
     bool training_sam3_draw_confidence_labels;
+    std::string training_sam3_preset_file;
+    std::string training_sam3_preset_class;
+    bool training_sam3_preset_hot_reload;
+    std::string training_sam3_presets_dir;
 
     struct GameProfile
     {

@@ -275,6 +275,10 @@ bool Config::loadConfig(const std::string& filename)
         training_sam3_max_detections = 100;
         training_sam3_draw_preview_boxes = true;
         training_sam3_draw_confidence_labels = true;
+        training_sam3_preset_file = "default.json";
+        training_sam3_preset_class = "head";
+        training_sam3_preset_hot_reload = true;
+        training_sam3_presets_dir = "models/presets";
 
         // Game profiles
         game_profiles.clear();
@@ -670,6 +674,10 @@ bool Config::loadConfig(const std::string& filename)
     if (training_sam3_max_detections > 1000) training_sam3_max_detections = 1000;
     training_sam3_draw_preview_boxes = get_bool("training_sam3_draw_preview_boxes", true);
     training_sam3_draw_confidence_labels = get_bool("training_sam3_draw_confidence_labels", true);
+    training_sam3_preset_file = get_string("training_sam3_preset_file", "default.json");
+    training_sam3_preset_class = get_string("training_sam3_preset_class", "head");
+    training_sam3_preset_hot_reload = get_bool("training_sam3_preset_hot_reload", true);
+    training_sam3_presets_dir = get_string("training_sam3_presets_dir", "models/presets");
 
     return true;
 }
@@ -928,7 +936,11 @@ bool Config::saveConfig(const std::string& filename)
         << "training_sam3_min_mask_fill_ratio = " << training_sam3_min_mask_fill_ratio << "\n"
         << "training_sam3_max_detections = " << training_sam3_max_detections << "\n"
         << "training_sam3_draw_preview_boxes = " << (training_sam3_draw_preview_boxes ? "true" : "false") << "\n"
-        << "training_sam3_draw_confidence_labels = " << (training_sam3_draw_confidence_labels ? "true" : "false") << "\n\n";
+        << "training_sam3_draw_confidence_labels = " << (training_sam3_draw_confidence_labels ? "true" : "false") << "\n"
+        << "training_sam3_preset_file = " << training_sam3_preset_file << "\n"
+        << "training_sam3_preset_class = " << training_sam3_preset_class << "\n"
+        << "training_sam3_preset_hot_reload = " << (training_sam3_preset_hot_reload ? "true" : "false") << "\n"
+        << "training_sam3_presets_dir = " << training_sam3_presets_dir << "\n\n";
 
     // Active game
     file << "# Active game profile\n";
