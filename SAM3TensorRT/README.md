@@ -8,8 +8,7 @@ Export Meta AI's Segment Anything 3 (SAM3) model to ONNX, then build a TensorRT 
 - [Demos](#demos)
 - [Repo Layout](#repo-layout)
 - [Quickstart](#quickstart)
-  - [On x86](#on-x86)
-  - [On Jetson/Spark](#on-jetsonspark)
+  - [On Windows](#on-windows)
 - [Extensions](#extensions)
 - [Troubleshooting](#troubleshooting)
 - [Development guide](#development-guide)
@@ -25,8 +24,7 @@ Export Meta AI's Segment Anything 3 (SAM3) model to ONNX, then build a TensorRT 
 - TensorRT-ready workflows for building optimized engines.
 - A C++/CUDA library for high-performance inference with demo apps.
 - Support for Promptable concept segmentation (PCS), the latest feautre in SAM3.
-- Zero-copy support on unified-memory platforms (Jetson, DGX Spark). Great for robotics/real-time interaction.
-- Everything runs inside a reproducible docker environment (x86, Jetson, Spark).
+- Native Windows build and runtime flow with CUDA, TensorRT, and OpenCV.
 - MIT license for the love of everything nice :)
 
 ## Benchmarks
@@ -34,16 +32,11 @@ The numbers show end to end image processing latency per image (4K resolution) i
 
 | Hardware | HF+PyTorch | TensorRT+CUDA | Speedup | Notes |
 | --- | --- | --- | --- | --- |
-| Jetson Orin NX | 6600 ms | 950 ms | 6.95x | Uses zero-copy |
-| Jetson Thor |  |  |  | Please contribute |
-| DGX Spark |  |  |  | Please contribute |
 | RTX 3090 | 438 ms | 75 ms | 5.82x |  |
 | A10 | 545.3 ms | 161.1 | 3.38x | GPU hits 100% utilization |
 | A100 | 314.1 ms | 48.8 ms | 6.43x | 40GB SXM4 variant |
 | H100 | 265.3 ms | 34.6 ms | 7.66x | PCIe variant |
 | H100 | 213.2 ms | 24.9 ms | 8.56x | SXM5 variant |
-| GH200 | 142.3 ms | 23.3 ms | 6.11x | arm64+H100 iGPU, without zero-copy |
-| GH200 | 142.3 ms | 26.4 ms | 5.39x | using zero-copy |
 | B200 | 160.0 ms | 17.7 ms | 9.03x | SXM6 variant |
 
 Note: the HF+PyTorch path is GPU-backed too, so these numbers compare two GPU implementations rather than CPU vs GPU.
@@ -65,7 +58,6 @@ Instance segmentation results (`prompt='box'`)
 ## Repo Layout
 - `python/` - ONNX export and visualization scripts.
 - `cpp/` - C++/CUDA library and apps (TensorRT inference).
-- `docker/` - Container setup (`Dockerfile.x86`, with an aarch64 variant expected).
 - `demo/` - Example outputs from the C++ demo app.
 
 ## Quickstart
@@ -73,78 +65,50 @@ Instance segmentation results (`prompt='box'`)
 1) Request access to the gated model
    - Visit https://huggingface.co/facebook/sam3 and request access.
    - Ensure your `HF_TOKEN` has permission.
-   - Set `HF_TOKEN` as environment variable in the host. Docker will pick it up from there.
+  - Set `HF_TOKEN` as an environment variable when running export scripts.
 
-2) Build the Docker container for your platform (all commands below run inside it)
-
-### On x86
-```bash
-docker build -t sam3-trt -f docker/Dockerfile.x86 .
-```
-
-### On Jetson/Spark
-
-For aarch64 platforms with shared CPU/GPU memory, the C++ library in this repo supports zero-copy inference paths.
-
-Build and run the aarch64 container:
-```bash
-docker build -t sam3-trt-aarch64 -f docker/Dockerfile.aarch64 .
-```
-
-3) Export `HF_TOKEN` and run the docker container 
-
-```bash
-export HF_TOKEN=<YOUR TOKEN>
-docker run -it --rm \
-  --network=host \
-  --gpus all \
-  --ipc=host \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  --runtime=nvidia \
-  --env HF_TOKEN \
-  -v "$PWD":/workspace \
-  -w /workspace \
-  sam3-trt bash
-```
-
-4) Export to ONNX
-```bash
+2) Export to ONNX
+```powershell
 python python/onnxexport.py
 ```
 This produces `onnx_weights/sam3_static.onnx` plus external weight shards.
 
-5) Build a TensorRT engine
-```bash
+3) Build a TensorRT engine
+```powershell
 trtexec --onnx=onnx_weights/sam3_static.onnx --saveEngine=sam3_fp16.plan --fp16 --verbose
 ```
 
-6) Build the C++/CUDA library and sample app
-```bash
-mkdir cpp/build && cd cpp/build
-cmake ..
-make
+4) Build the C++/CUDA library and sample app
+```powershell
+cmake -S cpp -B cpp/build-win-cuda -G "Visual Studio 18 2026" -A x64 -T "cuda=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler"
+cmake --build cpp/build-win-cuda --config Release --target sam3_pcs_app
 ```
 
-7) Run the demo app
-```bash
-./sam3_pcs_app <image_dir> <engine_path.engine>
+5) Run the demo app
+```powershell
+cpp/build-win-cuda/Release/sam3_pcs_app.exe <image_dir> <engine_path.engine>
 ```
 
 Results are written to a `results/` folder.
+
+### On Windows
+
+For a tested Windows-native flow (build, prompt tests, runtime DLL handling), use:
+
+- `WINDOWS_SAM3_PROMPT_TEST_GUIDE.md`
 
 
 ## Extensions
 This is a very raw project and provides the crucial backend TensorRT/CUDA bits necessary for anything. From here, please feel free to fan out into any application you like. Pull requests are very welcome! Here are some ideas I can think of:
 - ROS2 wrapper for real-time robotics pipelines.
 - Interactive voice-based segmentation app. Have someone speak into a microphone, use a TTS model to transcribe it and feed into the engine, which then produces the segmentation mask live. I don't have the time to build it but I hope you can.
-- Live camera input and overlays. You will need a beefy GPU. SAM3 doesn't run realtime on a Jetson nano.
+- Live camera input and overlays. You will need a beefy GPU.
 
 ## Troubleshooting
 - **Access errors:** Make sure your `HF_TOKEN` has access to `facebook/sam3`.
 - **ONNX export fails:** Install `transformers` from source if SAM3 is missing.
 - **TensorRT parse errors:** Ensure the full `onnx_weights/` directory is copied (external data is required).
-- **C++ build errors:** Confirm CUDA, TensorRT, and OpenCV are installed and discoverable via `pkg-config`.
+- **C++ build errors:** Confirm CUDA, TensorRT, and OpenCV are installed and discoverable through CMake variables and Windows paths.
 
 ## Development guide
 
@@ -158,13 +122,13 @@ This is a very raw project and provides the crucial backend TensorRT/CUDA bits n
 Use the same image directory and prompt for all runs. Both paths time the model pipeline and exclude image load/save.
 
 Huggingface + PyTorch:
-```bash
+```powershell
 python python/basic_script.py <image_dir>
 ```
 
 TensorRT + CUDA (benchmark mode disables output writes):
-```bash
-./sam3_pcs_app <image_dir> <engine_path.engine> 1
+```powershell
+cpp/build-win-cuda/Release/sam3_pcs_app.exe <image_dir> <engine_path.engine> 1
 ```
 
 ### ONNX Export Details

@@ -15,11 +15,11 @@ This research investigates **SAM3 (Segment Anything Model 3)** integration with 
 
 2. **Performance**: TensorRT optimization achieves **5-17x speedup** over PyTorch, with inference times ranging from 17.7ms (B200) to 75ms (RTX 3090) per image at 4K resolution.
 
-3. **Integration Path**: The existing `SAM3TensorRT` project in this repository provides a complete reference implementation with ONNX export, C++/CUDA inference library, and zero-copy optimizations for embedded platforms.
+3. **Integration Path**: The existing `SAM3TensorRT` project in this repository provides a complete reference implementation with ONNX export and a C++/CUDA inference library.
 
 4. **Auto-Labeling Pipeline**: SAM3's PCS capability enables text-prompted dataset generation (e.g., "person", "head", "torso") without per-instance annotation, dramatically accelerating training data creation for YOLO models.
 
-5. **Primary Recommendation**: Use FP16 precision with batch size 4 for optimal speed/accuracy trade-off. For real-time applications, consider the zero-copy path on integrated GPU platforms (Jetson, DGX Spark).
+5. **Primary Recommendation**: Use FP16 precision with batch size 4 for optimal speed/accuracy trade-off.
 
 ---
 
@@ -100,9 +100,6 @@ sam3_trt/
 ├── python/
 │   ├── onnxexport.py     # ONNX export script
 │   └── basic_script.py   # PyTorch reference
-├── docker/
-│   ├── Dockerfile.x86    # Desktop/workstation
-│   └── Dockerfile.aarch64 # Jetson/embedded
 └── CMakeLists.txt
 ```
 
@@ -416,14 +413,12 @@ for (int i = 0; i < num_queries; ++i) {
 
 | Hardware | PyTorch FP32 | TensorRT FP16 | Speedup | Notes |
 |----------|--------------|---------------|---------|-------|
-| Jetson Orin NX | 6600ms | 950ms | 6.95x | Zero-copy enabled |
 | RTX 3090 | 438ms | 75ms | 5.82x | Baseline desktop |
 | RTX 4090 | ~350ms | 45ms | ~7.8x | Estimate based on TFLOPS |
 | A10 | 545ms | 161ms | 3.38x | 100% GPU utilization |
 | A100 40GB | 314ms | 48.8ms | 6.43x | SXM4 variant |
 | H100 PCIe | 265ms | 34.6ms | 7.66x | PCIe variant |
 | H100 SXM5 | 213ms | 24.9ms | 8.56x | Higher TDP |
-| GH200 | 142ms | 23.3ms | 6.11x | ARM64 + H100 iGPU |
 | B200 | 160ms | 17.7ms | 9.03x | SXM6, Blackwell |
 
 **Source**: `SAM3TensorRT/README.md`
@@ -476,32 +471,21 @@ public:
 };
 ```
 
-### Docker Deployment
+### Native Windows Deployment
 
-```dockerfile
-# Dockerfile.x86 (production)
-FROM nvcr.io/nvidia/pytorch:25.11-py3
+```powershell
+cmake -S SAM3TensorRT/cpp -B SAM3TensorRT/cpp/build-win-cuda \
+    -G "Visual Studio 18 2026" -A x64 \
+    -T "cuda=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" \
+    -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential cmake pkg-config \
-    libopencv-dev libopencv-contrib-dev \
-    && rm -rf /var/lib/apt/lists/*
+cmake --build SAM3TensorRT/cpp/build-win-cuda --config Release --target sam3_pcs_app
 
-# Install Python dependencies
-RUN pip install transformers==5.0.0rc1 accelerate
-
-# Copy application
-COPY SAM3TensorRT/ /app/
-WORKDIR /app
-
-# Build C++ library
-RUN mkdir -p cpp/build && cd cpp/build && \
-    cmake .. && make -j$(nproc)
-
-# Entry point
-CMD ["./cpp/build/sam3_pcs_app"]
+SAM3TensorRT/cpp/build-win-cuda/Release/sam3_pcs_app.exe \
+    SAM3TensorRT/demo models/sam3_fp16.engine 1 prompt=person
 ```
+
+Reference: `SAM3TensorRT/WINDOWS_SAM3_PROMPT_TEST_GUIDE.md`
 
 ### Multi-Threading Considerations
 
@@ -636,7 +620,7 @@ std::unique_ptr<nvinfer1::IExecutionContext> context;
 | Manual annotation | AI-assisted with SAM 3 | Nov 2025 |
 | TensorRT 8.x API | TensorRT 10.x API | 2024 |
 | FP32 inference | FP16/FP8 inference | 2024-2025 |
-| Custom CUDA | Unified memory (zero-copy) | 2025 |
+| Custom CUDA kernels | Production CUDA preprocessing/postprocessing | 2025 |
 
 **Deprecated/Outdated**:
 - SAM 1/2 for multi-object detection: Use SAM 3 PCS instead

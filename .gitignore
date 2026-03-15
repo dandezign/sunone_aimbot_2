@@ -67,11 +67,9 @@ setup_opencv_dml_run.log
 
 # zip files
 *.zip
-
+models/
 .worktrees
 .venv
 .idea
-*.engine
-*.onnx
-*.pt
-SAM3TensorRT/python/onnx_weights/
+**onnx_weights/
+__pycache__/
