@@ -45,6 +45,19 @@ public:
     void pin_opencv_matrices(cv::Mat& input_mat, cv::Mat& result_mat);
     // void get_input_sizes()
     void set_prompt(std::vector<int64_t>& input_ids, std::vector<int64_t>& input_attention_mask);
+    
+    void set_class_id(int class_id);
+    
+    std::vector<SAM3_PCS_RESULT> extract_bounding_boxes(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options = SAM3_BBOX_OPTIONS{}
+    );
+    
+    bool save_yolo_labels(
+        const std::string& image_path,
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options = SAM3_BBOX_OPTIONS{}
+    );
     std::vector<void*> output_cpu;
 
 private:
@@ -61,6 +74,15 @@ private:
     std::vector<void*> output_gpu;
     std::vector<size_t>output_sizes;
 
+    // Bounding box extraction buffers
+    int* d_mask_bboxes;        // Device: [200, 4] mask-space bboxes
+    int* d_image_bboxes;       // Device: [200, 4] image-space bboxes
+    float* d_instance_scores;  // Device: [200] confidence scores
+    int* h_bbox_buffer;        // Host: [200, 4] for copying results
+    float* h_score_buffer;     // Host: [200] for copying scores
+    
+    int _current_class_id = 0;
+
     void* opencv_input; // used only if dGPU
     uint8_t* gpu_result; // used for both
     uint8_t* zc_input; // used only if iGPU
@@ -71,9 +93,23 @@ private:
     
     void check_zero_copy();
     void allocate_io_buffers();
+    void allocate_bbox_buffers();
     void load_engine();
     bool infer_on_dGPU(const cv::Mat& input, cv::Mat& result, SAM3_VISUALIZATION vis_type);
     bool infer_on_iGPU(const cv::Mat& input, cv::Mat& result, SAM3_VISUALIZATION vis_type);
+
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_cuda_kernel(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cuda(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cpu(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
 
     void visualize_on_dGPU(const cv::Mat& input, cv::Mat& result, SAM3_VISUALIZATION vis_type);
     const float _overlay_alpha, _probability_threshold;
