@@ -38,8 +38,15 @@ struct Sam3UiSnapshot {
     int minBoxHeight = 20;
     float minMaskFillRatio = 0.01f;
     int maxDetections = 100;
-    bool drawPreviewBoxes = true;
+bool drawPreviewBoxes = true;
     bool drawConfidenceLabels = true;
+
+    // Game overlay box appearance
+    int boxA = 200;
+    int boxR = 0;
+    int boxG = 255;
+    int boxB = 100;
+    float boxThickness = 2.0f;
 };
 
 Sam3UiSnapshot ReadSam3UiSnapshot()
@@ -53,8 +60,15 @@ Sam3UiSnapshot ReadSam3UiSnapshot()
     snapshot.minBoxHeight = config.training_sam3_min_box_height;
     snapshot.minMaskFillRatio = config.training_sam3_min_mask_fill_ratio;
     snapshot.maxDetections = config.training_sam3_max_detections;
-    snapshot.drawPreviewBoxes = config.training_sam3_draw_preview_boxes;
+snapshot.drawPreviewBoxes = config.training_sam3_draw_preview_boxes;
     snapshot.drawConfidenceLabels = config.training_sam3_draw_confidence_labels;
+
+    // Game overlay box appearance
+    snapshot.boxA = config.training_sam3_box_a;
+    snapshot.boxR = config.training_sam3_box_r;
+    snapshot.boxG = config.training_sam3_box_g;
+    snapshot.boxB = config.training_sam3_box_b;
+    snapshot.boxThickness = config.training_sam3_box_thickness;
     return snapshot;
 }
 
