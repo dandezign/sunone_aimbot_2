@@ -175,3 +175,80 @@ __global__ void draw_instance_seg_mask(
         }
     }
 }
+
+__global__ void compute_bboxes_from_masks(
+    const float* __restrict__ mask_logits,
+    int* bbox_output,
+    float* scores_output,
+    int num_instances,
+    int mask_width,
+    int mask_height,
+    float prob_threshold)
+{
+    // One block per instance
+    int instance_idx = blockIdx.x;
+    if (instance_idx >= num_instances) return;
+    
+    // Shared memory for block-level reduction
+    __shared__ int s_x_min, s_y_min, s_x_max, s_y_max;
+    __shared__ float s_score_sum;
+    __shared__ int s_pixel_count;
+    
+    // Initialize shared memory (first thread in block)
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        s_x_min = mask_width;
+        s_y_min = mask_height;
+        s_x_max = -1;
+        s_y_max = -1;
+        s_score_sum = 0.0f;
+        s_pixel_count = 0;
+    }
+    __syncthreads();
+    
+    // Each thread processes one row of the mask
+    int y = threadIdx.x;
+    const int mask_size = mask_width * mask_height;
+    const float* instance_mask = mask_logits + instance_idx * mask_size;
+    
+    for (int x = 0; x < mask_width; ++x) {
+        int idx = y * mask_width + x;
+        if (idx >= mask_size) continue;
+        
+        float logit = instance_mask[idx];
+        float prob = 1.0f / (1.0f + expf(-logit));  // sigmoid
+        
+        // Accumulate score for all pixels
+        atomicAdd(&s_score_sum, prob);
+        atomicAdd(&s_pixel_count, 1);
+        
+        // Update bbox only for pixels above threshold
+        if (prob >= prob_threshold) {
+            atomicMin(&s_x_min, x);
+            atomicMin(&s_y_min, y);
+            atomicMax(&s_x_max, x);
+            atomicMax(&s_y_max, y);
+        }
+    }
+    __syncthreads();
+    
+    // Write results (first thread in block)
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        // Check if any pixels were above threshold
+        if (s_x_max >= 0) {
+            bbox_output[instance_idx * 4 + 0] = s_x_min;
+            bbox_output[instance_idx * 4 + 1] = s_y_min;
+            bbox_output[instance_idx * 4 + 2] = s_x_max;
+            bbox_output[instance_idx * 4 + 3] = s_y_max;
+        } else {
+            // No valid bbox - set to invalid values
+            bbox_output[instance_idx * 4 + 0] = -1;
+            bbox_output[instance_idx * 4 + 1] = -1;
+            bbox_output[instance_idx * 4 + 2] = -1;
+            bbox_output[instance_idx * 4 + 3] = -1;
+        }
+        
+        // Compute mean score
+        scores_output[instance_idx] = s_pixel_count > 0 ? 
+            s_score_sum / static_cast<float>(s_pixel_count) : 0.0f;
+    }
+}
