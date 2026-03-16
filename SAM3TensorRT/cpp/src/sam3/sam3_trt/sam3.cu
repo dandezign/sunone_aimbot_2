@@ -514,6 +514,54 @@ std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_opencv_cpu(
     return extract_bboxes_cuda_kernel(original_size, options);
 }
 
+bool SAM3_PCS::save_yolo_labels(
+    const std::string& image_path,
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    auto detections = extract_bounding_boxes(original_size, options);
+    
+    if (detections.empty()) {
+        return false;
+    }
+    
+    std::filesystem::path img_path(image_path);
+    std::string label_filename = img_path.stem().string() + ".txt";
+    
+    std::filesystem::path label_dir = 
+        std::filesystem::current_path() / "scripts" / "training" / 
+        "datasets" / "game" / "labels";
+    
+    std::filesystem::create_directories(label_dir);
+    
+    std::filesystem::path label_path = label_dir / label_filename;
+    
+    std::ofstream fout(label_path);
+    if (!fout.is_open()) {
+        std::cerr << "Error: Could not open label file for writing: " 
+                  << label_path << std::endl;
+        return false;
+    }
+    
+    for (const auto& det : detections) {
+        float x_center = (det.box_x + det.box_w / 2.0f) / original_size.width;
+        float y_center = (det.box_y + det.box_h / 2.0f) / original_size.height;
+        float width = static_cast<float>(det.box_w) / original_size.width;
+        float height = static_cast<float>(det.box_h) / original_size.height;
+        
+        fout << det.class_id << " "
+             << std::fixed << std::setprecision(6)
+             << x_center << " " << y_center << " "
+             << width << " " << height << "\n";
+    }
+    fout.close();
+    
+    std::cout << "Saved " << detections.size() << " detections to " 
+              << label_path << std::endl;
+    
+    return true;
+}
+
 SAM3_PCS::~SAM3_PCS() {
   for (auto &ptr : input_gpu) {
     if (ptr) {
