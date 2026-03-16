@@ -404,12 +404,46 @@ static void DrawSam3DetectionSection()
     ImGui::SameLine();
     HelpMarker("Draw SAM3 boxes on the capture preview only when Label mode has a valid synced snapshot.");
 
-    bool drawConfidenceLabels = sam3Config.drawConfidenceLabels;
+bool drawConfidenceLabels = sam3Config.drawConfidenceLabels;
     if (ImGui::Checkbox("Draw Confidence Labels", &drawConfidenceLabels)) {
         WriteSam3ConfigBool(config.training_sam3_draw_confidence_labels, drawConfidenceLabels);
     }
     ImGui::SameLine();
     HelpMarker("Show per-box confidence text on the synced SAM3 capture preview.");
+
+    // Game Overlay Appearance
+    ImGui::SeparatorText("Game Overlay Appearance");
+
+    int boxA = sam3Config.boxA;
+    int boxR = sam3Config.boxR;
+    int boxG = sam3Config.boxG;
+    int boxB = sam3Config.boxB;
+    float boxThickness = sam3Config.boxThickness;
+
+    ImGui::Text("Box Color (ARGB):");
+    ImGui::SameLine();
+
+    ImGui::PushItemWidth(60);
+    if (ImGui::SliderInt("A##sam3_box_a", &boxA, 0, 255)) {
+        WriteSam3ConfigInt(config.training_sam3_box_a, boxA, 0, 255);
+    }
+    ImGui::SameLine();
+    if (ImGui::SliderInt("R##sam3_box_r", &boxR, 0, 255)) {
+        WriteSam3ConfigInt(config.training_sam3_box_r, boxR, 0, 255);
+    }
+    ImGui::SameLine();
+    if (ImGui::SliderInt("G##sam3_box_g", &boxG, 0, 255)) {
+        WriteSam3ConfigInt(config.training_sam3_box_g, boxG, 0, 255);
+    }
+    ImGui::SameLine();
+    if (ImGui::SliderInt("B##sam3_box_b", &boxB, 0, 255)) {
+        WriteSam3ConfigInt(config.training_sam3_box_b, boxB, 0, 255);
+    }
+    ImGui::PopItemWidth();
+
+    if (ImGui::SliderFloat("Thickness", &boxThickness, 0.5f, 5.0f, "%.1f")) {
+        WriteSam3ConfigFloat(config.training_sam3_box_thickness, boxThickness, 0.5f, 5.0f);
+    }
 }
 
 static void DrawDatasetInfoSection()
