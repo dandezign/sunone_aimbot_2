@@ -364,6 +364,10 @@ void SAM3_PCS::set_prompt(std::vector<int64_t> &input_ids,
   }
 }
 
+void SAM3_PCS::set_class_id(int class_id) {
+    _current_class_id = class_id;
+}
+
 void SAM3_PCS::setup_color_palette() {
   cuda_check(cudaMalloc(&gpu_colpal, colpal.size() * sizeof(float3)),
              " allocating color palette on GPU");
