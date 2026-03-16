@@ -278,7 +278,12 @@ bool Config::loadConfig(const std::string& filename)
         training_sam3_preset_file = "default.json";
         training_sam3_preset_class = "head";
         training_sam3_preset_hot_reload = true;
-        training_sam3_presets_dir = "models/presets";
+training_sam3_presets_dir = "models/presets";
+        training_sam3_box_a = 200;
+        training_sam3_box_r = 0;
+        training_sam3_box_g = 255;
+        training_sam3_box_b = 100;
+        training_sam3_box_thickness = 2.0f;
 
         // Game profiles
         game_profiles.clear();
