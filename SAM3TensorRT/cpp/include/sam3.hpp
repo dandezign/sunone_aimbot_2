@@ -18,10 +18,31 @@ typedef enum {
     VIS_INSTANCE_SEGMENTATION
 } SAM3_VISUALIZATION;
 
+typedef enum {
+    BBOX_BACKEND_OPENCV_CPU,    // Fallback, simpler
+    BBOX_BACKEND_OPENCV_CUDA,   // Uses cv::cuda::GpuMat
+    BBOX_BACKEND_CUDA_KERNEL    // Custom CUDA kernel (fastest)
+} SAM3_BBOX_BACKEND;
+
 typedef struct {
-    float score;
+    SAM3_BBOX_BACKEND backend = BBOX_BACKEND_CUDA_KERNEL;
+    float score_threshold = 0.5f;      // Filter results by instance confidence
+    int min_box_area = 100;            // Filter tiny boxes (pixels^2)
+    bool include_contours = false;     // Export polygon points
+} SAM3_BBOX_OPTIONS;
+
+typedef struct {
+    float score;           // Confidence from sigmoid of mask mean
+    int class_id;          // Mapped from prompt/class argument
+    
+    // Bounding box in ORIGINAL IMAGE coordinates
     int box_x, box_y, box_w, box_h;
-    std::vector<int> mask_x;
-    std::vector<int> mask_y;
+    
+    // Bounding box in MASK coordinates (288x288 space)
+    int mask_x, mask_y, mask_w, mask_h;
+    
+    // Optional: contour points for polygon export
+    std::vector<int> contour_x;
+    std::vector<int> contour_y;
 } SAM3_PCS_RESULT;
 
