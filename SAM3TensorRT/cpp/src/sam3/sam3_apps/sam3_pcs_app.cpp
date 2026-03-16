@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <opencv2/imgproc.hpp>
 #include <sstream>
 #include <thread>
@@ -60,6 +62,36 @@ std::string trim_copy(const std::string &s) {
   }
   const auto end = s.find_last_not_of(" \t\r\n");
   return s.substr(begin, end - begin + 1);
+}
+
+int load_class_id_from_file(
+    const std::string& class_name,
+    const std::string& classes_file_path)
+{
+    std::ifstream file(classes_file_path);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open classes file: " 
+                  << classes_file_path << std::endl;
+        return -1;
+    }
+    
+    std::string line;
+    int class_id = 0;
+    
+    while (std::getline(file, line)) {
+        line = trim_copy(line);
+        
+        if (line.empty()) continue;
+        
+        if (line == class_name) {
+            return class_id;
+        }
+        class_id++;
+    }
+    
+    std::cerr << "Error: Class name '" << class_name 
+              << "' not found in " << classes_file_path << std::endl;
+    return -1;
 }
 
 std::string shell_quote(const std::string &s) {
@@ -244,8 +276,8 @@ bool build_prompt_from_arg(const std::string &arg, std::vector<int64_t> &ids,
 } // namespace
 
 void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
-                     const SAM3_VISUALIZATION vis, const std::string outfile,
-                     bool benchmark_run) {
+                      const SAM3_VISUALIZATION vis, const std::string outfile,
+                      bool benchmark_run, bool save_yolo) {
   bool success = pcs.infer_on_image(img, result, vis);
 
   if (benchmark_run) {
@@ -255,31 +287,49 @@ void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
   if (vis == SAM3_VISUALIZATION::VIS_NONE) {
     cv::Mat seg = cv::Mat(SAM3_OUTMASK_WIDTH, SAM3_OUTMASK_HEIGHT, CV_32FC1,
                           pcs.output_cpu[1]);
-    // these are raw logits and should be passed through sigmoid before for any
-    // quantitative use
   } else {
     cv::imwrite(outfile, result);
+  }
+
+  if (save_yolo) {
+    SAM3_BBOX_OPTIONS bbox_opts;
+    bbox_opts.backend = BBOX_BACKEND_CUDA_KERNEL;
+    bbox_opts.score_threshold = 0.5f;
+    bbox_opts.min_box_area = 100;
+
+    pcs.save_yolo_labels(outfile, img.size(), bbox_opts);
   }
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
     std::cout << "Usage: ./sam3_pcs_app indir engine_path.engine "
-                 "[benchmark=0|1] [prompt=person|ids:<csv>]"
+                 "[-prompt <text>] [-class <class_name>] [benchmark=0|1]"
               << std::endl;
     return 0;
   }
 
   const std::string in_dir = argv[1];
   std::string epath = argv[2];
-  bool benchmark = false; // in benchmarking mode we dont save output images
+  bool benchmark = false;
   std::string prompt_arg = "person";
+  std::string class_arg = "";
 
   for (int argi = 3; argi < argc; ++argi) {
     std::string arg = argv[argi];
 
     if (arg == "0" || arg == "1") {
       benchmark = (arg == "1");
+      continue;
+    }
+
+    if (arg == "-prompt" && argi + 1 < argc) {
+      prompt_arg = argv[++argi];
+      continue;
+    }
+
+    if (arg == "-class" && argi + 1 < argc) {
+      class_arg = argv[++argi];
       continue;
     }
 
@@ -327,6 +377,31 @@ int main(int argc, char *argv[]) {
 
   pcs.set_prompt(iid, iam);
 
+  int class_id = -1;
+  bool save_yolo = false;
+
+  if (!class_arg.empty()) {
+    std::string classes_path = "scripts/training/predefined_classes.txt";
+
+    if (!std::filesystem::exists(classes_path)) {
+      classes_path = std::filesystem::current_path().string() + 
+                     "/scripts/training/predefined_classes.txt";
+    }
+
+    class_id = load_class_id_from_file(class_arg, classes_path);
+
+    if (class_id < 0) {
+      std::cerr << "Error: Could not resolve class '" << class_arg << "'" 
+                << std::endl;
+      return 1;
+    }
+
+    pcs.set_class_id(class_id);
+    save_yolo = true;
+    std::cout << "YOLO class '" << class_arg << "' mapped to ID " 
+              << class_id << std::endl;
+  }
+
   for (const auto &fname : std::filesystem::directory_iterator(in_dir)) {
     if (std::filesystem::is_regular_file(fname.path())) {
       std::filesystem::path outfile =
@@ -351,7 +426,7 @@ int main(int argc, char *argv[]) {
         }
       }
       start = std::chrono::system_clock::now();
-      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark);
+      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark, save_yolo);
       num_images_read++;
       end = std::chrono::system_clock::now();
       diff = end - start;
