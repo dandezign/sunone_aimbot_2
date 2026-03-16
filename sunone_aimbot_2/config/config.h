@@ -233,6 +233,12 @@ public:
     std::string training_sam3_preset_class;
     bool training_sam3_preset_hot_reload;
     std::string training_sam3_presets_dir;
+    // SAM3 game overlay box appearance
+    int training_sam3_box_a;
+    int training_sam3_box_r;
+    int training_sam3_box_g;
+    int training_sam3_box_b;
+    float training_sam3_box_thickness;
 
     struct GameProfile
     {
