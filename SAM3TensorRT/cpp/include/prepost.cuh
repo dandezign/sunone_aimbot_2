@@ -14,6 +14,9 @@
 #define SAM3_OUTMASK_HEIGHT 288
 // taken from https://huggingface.co/facebook/sam3/blob/main/processor_config.json
 
+#define SAM3_MAX_INSTANCES 200
+#define SAM3_BBOX_COORDS 4  // x_min, y_min, x_max, y_max
+
 __global__ void pre_process_sam3(
     uint8_t* src,
     float* dst,
@@ -49,6 +52,26 @@ __global__ void draw_instance_seg_mask(
     float mask_alpha,
     float prob_threshold,
     float3* color_palette
+);
+
+__global__ void compute_bboxes_from_masks(
+    const float* __restrict__ mask_logits,
+    int* bbox_output,
+    float* scores_output,
+    int num_instances,
+    int mask_width,
+    int mask_height,
+    float prob_threshold
+);
+
+__global__ void scale_bboxes_to_image(
+    const int* mask_bboxes,
+    int* image_bboxes,
+    int num_instances,
+    int mask_width,
+    int mask_height,
+    int image_width,
+    int image_height
 );
 
 static std::vector<float3> colpal = {
