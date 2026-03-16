@@ -1,4 +1,30 @@
 #include "sam3.cuh"
+#include <fstream>
+#include <iomanip>
+
+void SAM3_PCS::allocate_bbox_buffers() {
+    const int num_instances = SAM3_MAX_INSTANCES;
+    const size_t bbox_bytes = num_instances * SAM3_BBOX_COORDS * sizeof(int);
+    const size_t score_bytes = num_instances * sizeof(float);
+    
+    cuda_check(cudaMalloc(&d_mask_bboxes, bbox_bytes),
+               "allocating d_mask_bboxes");
+    cuda_check(cudaMalloc(&d_image_bboxes, bbox_bytes),
+               "allocating d_image_bboxes");
+    cuda_check(cudaMalloc(&d_instance_scores, score_bytes),
+               "allocating d_instance_scores");
+    
+    cuda_check(cudaHostAlloc(&h_bbox_buffer, bbox_bytes, cudaHostAllocDefault),
+               "allocating h_bbox_buffer");
+    cuda_check(cudaHostAlloc(&h_score_buffer, score_bytes, cudaHostAllocDefault),
+               "allocating h_score_buffer");
+    
+    cudaMemset(d_mask_bboxes, -1, bbox_bytes);
+    cudaMemset(d_image_bboxes, -1, bbox_bytes);
+    cudaMemset(d_instance_scores, 0, score_bytes);
+    memset(h_bbox_buffer, -1, bbox_bytes);
+    memset(h_score_buffer, 0, score_bytes);
+}
 
 static size_t trt_element_size(nvinfer1::DataType dtype) {
   switch (dtype) {
@@ -25,18 +51,22 @@ static size_t trt_element_size(nvinfer1::DataType dtype) {
 SAM3_PCS::SAM3_PCS(const std::string engine_path, const float vis_alpha,
                    const float prob_threshold)
     : _engine_path(engine_path), _overlay_alpha(vis_alpha),
-      _probability_threshold(prob_threshold) {
+      _probability_threshold(prob_threshold),
+      d_mask_bboxes(nullptr), d_image_bboxes(nullptr),
+      d_instance_scores(nullptr), h_bbox_buffer(nullptr),
+      h_score_buffer(nullptr), _current_class_id(0) {
 
   cuda_check(cudaStreamCreate(&sam3_stream), "creating CUDA stream for SAM3");
 
   trt_runtime = std::unique_ptr<nvinfer1::IRuntime>(
       nvinfer1::createInferRuntime(trt_logger));
-  load_engine(); // after runtime is created, we can create the engine
+  load_engine();
   trt_ctx = std::unique_ptr<nvinfer1::IExecutionContext>(
       trt_engine->createExecutionContext());
 
-  check_zero_copy(); // needed before allocating io buffers
+  check_zero_copy();
   allocate_io_buffers();
+  allocate_bbox_buffers();
   setup_color_palette();
 
   bsize.x = 16;
@@ -358,4 +388,10 @@ SAM3_PCS::~SAM3_PCS() {
       cudaFree(ptr);
     }
   }
+
+  if (d_mask_bboxes) cudaFree(d_mask_bboxes);
+  if (d_image_bboxes) cudaFree(d_image_bboxes);
+  if (d_instance_scores) cudaFree(d_instance_scores);
+  if (h_bbox_buffer) cudaFreeHost(h_bbox_buffer);
+  if (h_score_buffer) cudaFreeHost(h_score_buffer);
 }
