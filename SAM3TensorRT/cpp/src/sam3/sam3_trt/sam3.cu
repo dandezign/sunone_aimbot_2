@@ -479,6 +479,41 @@ std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_cuda_kernel(
     return results;
 }
 
+std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bounding_boxes(
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    switch (options.backend) {
+        case BBOX_BACKEND_CUDA_KERNEL:
+            return extract_bboxes_cuda_kernel(original_size, options);
+        case BBOX_BACKEND_OPENCV_CUDA:
+            return extract_bboxes_opencv_cuda(original_size, options);
+        case BBOX_BACKEND_OPENCV_CPU:
+            return extract_bboxes_opencv_cpu(original_size, options);
+        default:
+            std::cerr << "Warning: Unknown backend, using CUDA kernel" << std::endl;
+            return extract_bboxes_cuda_kernel(original_size, options);
+    }
+}
+
+std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_opencv_cuda(
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    std::cerr << "Warning: OpenCV CUDA backend not yet implemented, "
+              << "falling back to CUDA kernel" << std::endl;
+    return extract_bboxes_cuda_kernel(original_size, options);
+}
+
+std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_opencv_cpu(
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    std::cerr << "Warning: OpenCV CPU backend not yet implemented, "
+              << "falling back to CUDA kernel" << std::endl;
+    return extract_bboxes_cuda_kernel(original_size, options);
+}
+
 SAM3_PCS::~SAM3_PCS() {
   for (auto &ptr : input_gpu) {
     if (ptr) {
