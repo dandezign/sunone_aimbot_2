@@ -244,22 +244,16 @@ if (activeInferenceMode.load() == training::InferenceMode::Label &&
             const float sam3ScaleX = static_cast<float>(regionW) / static_cast<float>(sam3FrameW);
             const float sam3ScaleY = static_cast<float>(regionH) / static_cast<float>(sam3FrameH);
             
-            // Get color from config
-            auto clamp255 = [](int& v) { if (v < 0) v = 0; else if (v > 255) v = 255; };
-            int a = config.training_sam3_box_a;
-            int r = config.training_sam3_box_r;
-            int g = config.training_sam3_box_g;
-            int b = config.training_sam3_box_b;
-            clamp255(a); clamp255(r); clamp255(g); clamp255(b);
+            // Build color using ARGB() helper (defined in Game_overlay.h)
+            const uint32_t boxCol = ARGB(
+                static_cast<uint8_t>(std::clamp(config.training_sam3_box_a, 0, 255)),
+                static_cast<uint8_t>(std::clamp(config.training_sam3_box_r, 0, 255)),
+                static_cast<uint8_t>(std::clamp(config.training_sam3_box_g, 0, 255)),
+                static_cast<uint8_t>(std::clamp(config.training_sam3_box_b, 0, 255))
+            );
             
-            const uint32_t boxCol = 
-                (static_cast<uint32_t>(a) << 24) |
-                (static_cast<uint32_t>(r) << 16) |
-                (static_cast<uint32_t>(g) << 8) |
-                static_cast<uint32_t>(b);
-            
-            float thickness = config.training_sam3_box_thickness;
-            if (thickness <= 0.f) thickness = 1.f;
+            // Thickness is already clamped by WriteSam3ConfigFloat (0.5f - 5.0f)
+            const float thickness = config.training_sam3_box_thickness;
             
             for (const auto& detection : sam3Snapshot.result.boxes)
             {
