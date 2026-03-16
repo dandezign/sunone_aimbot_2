@@ -80,7 +80,7 @@ Where:
 
 **File**: `sunone_aimbot_2/config/config.h`
 
-Add the following member variables to the `Config` class:
+**Add the following NEW member variables** to the `Config` class:
 
 ```cpp
 // SAM3 game overlay box appearance
@@ -91,9 +91,14 @@ int training_sam3_box_b = 100;        // Blue channel (0-255)
 float training_sam3_box_thickness = 2.0f;  // Outline thickness
 ```
 
+**Existing fields used** (already defined, no changes needed):
+- `training_sam3_draw_preview_boxes` - Toggle for box visibility
+- `training_sam3_draw_confidence_labels` - Toggle for confidence text
+- `training_sam3_preset_class` - Class name for labels
+
 **File**: `sunone_aimbot_2/config/config.cpp`
 
-Add defaults in `Config::Config()` (in the defaults section around line 278):
+Add defaults in `Config::Config()` (after existing SAM3 defaults around lines 270-281):
 
 ```cpp
 training_sam3_box_a = 200;
@@ -103,7 +108,7 @@ training_sam3_box_b = 100;
 training_sam3_box_thickness = 2.0f;
 ```
 
-Add read logic in `Config::read()` (around line 680):
+Add read logic in `Config::read()` (after existing SAM3 reads around lines 675-680):
 
 ```cpp
 training_sam3_box_a = get_int("training_sam3_box_a", 200);
@@ -113,7 +118,7 @@ training_sam3_box_b = get_int("training_sam3_box_b", 100);
 training_sam3_box_thickness = get_float("training_sam3_box_thickness", 2.0f);
 ```
 
-Add write logic in `Config::write()` (around line 940):
+Add write logic in `Config::write()` (after existing SAM3 writes around lines 938-943):
 
 ```cpp
 file << "training_sam3_box_a = " << training_sam3_box_a << "\n"
@@ -170,8 +175,8 @@ Insert after the YOLO boxes section (after line ~1936, before the "FUTURE POINTS
 
 ```cpp
 // SAM3 DETECTION BOXES (Label Mode)
-const auto currentInferenceMode = activeInferenceMode.load();
-if (currentInferenceMode == static_cast<int>(training::InferenceMode::Label) &&
+// Note: activeInferenceMode is std::atomic<training::InferenceMode> (see line 43)
+if (activeInferenceMode.load() == training::InferenceMode::Label &&
     config.training_sam3_draw_preview_boxes)
 {
     const auto sam3Snapshot = training::GetTrainingLatestPreviewOverlaySnapshot();
@@ -244,6 +249,7 @@ if (currentInferenceMode == static_cast<int>(training::InferenceMode::Label) &&
                     const float classY = y + h + 2.0f;
                     
                     // Convert std::string to std::wstring
+                    // Note: ASCII-only; for UTF-8, would need MultiByteToWideChar
                     std::wstring className(config.training_sam3_preset_class.begin(), 
                                           config.training_sam3_preset_class.end());
                     
@@ -255,12 +261,19 @@ if (currentInferenceMode == static_cast<int>(training::InferenceMode::Label) &&
 }
 ```
 
-### 4. Required Include
+### 4. Required Includes
 
-Ensure `sunone_aimbot_2.cpp` includes the training namespace header:
+The following headers are needed. The `training_sam3_runtime.h` header transitively includes `training_inference_mode.h`:
 
 ```cpp
-#include "sunone_aimbot_2/training/training_sam3_runtime.h"
+#include "sunone_aimbot_2/training/training_sam3_runtime.h"  // For GetTrainingLatestPreviewOverlaySnapshot(), InferenceMode
+```
+
+**Note**: The `ARGB()` macro is defined in `overlay/Game_overlay.h:13` as:
+```cpp
+inline constexpr uint32_t ARGB(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
+    return (uint32_t(a) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+}
 ```
 
 ## Configuration
@@ -309,6 +322,7 @@ Existing config fields used:
 - No detections: No boxes shown (normal behavior)
 - Frame size changes: Coordinate scaling adjusts correctly
 - Config out of range: Values clamped to valid range
+- Empty preset class: No class label displayed (handled by `if (!empty())` check)
 
 ## Files Modified
 
