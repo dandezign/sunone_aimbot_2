@@ -380,6 +380,105 @@ void SAM3_PCS::setup_color_palette() {
   cudaStreamSynchronize(sam3_stream);
 }
 
+std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_cuda_kernel(
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    std::vector<SAM3_PCS_RESULT> results;
+    
+    if (output_gpu.empty() || !output_gpu[0]) {
+        std::cerr << "Warning: No inference results available. Call infer_on_image() first."
+                  << std::endl;
+        return results;
+    }
+    
+    const int num_instances = SAM3_MAX_INSTANCES;
+    const int mask_width = SAM3_OUTMASK_WIDTH;
+    const int mask_height = SAM3_OUTMASK_HEIGHT;
+    
+    compute_bboxes_from_masks<<<num_instances, mask_height, 0, sam3_stream>>>(
+        static_cast<float*>(output_gpu[0]),
+        d_mask_bboxes,
+        d_instance_scores,
+        num_instances,
+        mask_width,
+        mask_height,
+        _probability_threshold
+    );
+    
+    int block_size = 256;
+    int grid_size = (num_instances + block_size - 1) / block_size;
+    scale_bboxes_to_image<<<grid_size, block_size, 0, sam3_stream>>>(
+        d_mask_bboxes,
+        d_image_bboxes,
+        num_instances,
+        mask_width,
+        mask_height,
+        original_size.width,
+        original_size.height
+    );
+    
+    const size_t bbox_bytes = num_instances * SAM3_BBOX_COORDS * sizeof(int);
+    const size_t score_bytes = num_instances * sizeof(float);
+    
+    cudaMemcpyAsync(h_bbox_buffer, d_image_bboxes, bbox_bytes,
+                    cudaMemcpyDeviceToHost, sam3_stream);
+    cudaMemcpyAsync(h_score_buffer, d_instance_scores, score_bytes,
+                    cudaMemcpyDeviceToHost, sam3_stream);
+    
+    int* h_mask_bbox_temp;
+    cudaHostAlloc(&h_mask_bbox_temp, bbox_bytes, cudaHostAllocDefault);
+    cudaMemcpyAsync(h_mask_bbox_temp, d_mask_bboxes, bbox_bytes,
+                    cudaMemcpyDeviceToHost, sam3_stream);
+    
+    cudaStreamSynchronize(sam3_stream);
+    
+    for (int i = 0; i < num_instances; ++i) {
+        float score = h_score_buffer[i];
+        
+        if (score < options.score_threshold) continue;
+        
+        int mask_x_min = h_mask_bbox_temp[i * 4 + 0];
+        int mask_y_min = h_mask_bbox_temp[i * 4 + 1];
+        int mask_x_max = h_mask_bbox_temp[i * 4 + 2];
+        int mask_y_max = h_mask_bbox_temp[i * 4 + 3];
+        
+        if (mask_x_min < 0) continue;
+        
+        int img_x_min = h_bbox_buffer[i * 4 + 0];
+        int img_y_min = h_bbox_buffer[i * 4 + 1];
+        int img_x_max = h_bbox_buffer[i * 4 + 2];
+        int img_y_max = h_bbox_buffer[i * 4 + 3];
+        
+        int mask_w = mask_x_max - mask_x_min + 1;
+        int mask_h = mask_y_max - mask_y_min + 1;
+        int img_w = img_x_max - img_x_min + 1;
+        int img_h = img_y_max - img_y_min + 1;
+        
+        if (img_w * img_h < options.min_box_area) continue;
+        
+        SAM3_PCS_RESULT result;
+        result.score = score;
+        result.class_id = _current_class_id;
+        
+        result.box_x = img_x_min;
+        result.box_y = img_y_min;
+        result.box_w = img_w;
+        result.box_h = img_h;
+        
+        result.mask_x = mask_x_min;
+        result.mask_y = mask_y_min;
+        result.mask_w = mask_w;
+        result.mask_h = mask_h;
+        
+        results.push_back(result);
+    }
+    
+    cudaFreeHost(h_mask_bbox_temp);
+    
+    return results;
+}
+
 SAM3_PCS::~SAM3_PCS() {
   for (auto &ptr : input_gpu) {
     if (ptr) {
