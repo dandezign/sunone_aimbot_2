@@ -244,3 +244,42 @@ __global__ void compute_bboxes_from_masks(
             s_score_sum / static_cast<float>(s_pixel_count) : 0.0f;
     }
 }
+
+__global__ void scale_bboxes_to_image(
+    const int* mask_bboxes,
+    int* image_bboxes,
+    int num_instances,
+    int mask_width,
+    int mask_height,
+    int image_width,
+    int image_height)
+{
+    int instance_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (instance_idx >= num_instances) return;
+    
+    int x_min = mask_bboxes[instance_idx * 4 + 0];
+    int y_min = mask_bboxes[instance_idx * 4 + 1];
+    int x_max = mask_bboxes[instance_idx * 4 + 2];
+    int y_max = mask_bboxes[instance_idx * 4 + 3];
+    
+    // Check for invalid bbox
+    if (x_min < 0) {
+        image_bboxes[instance_idx * 4 + 0] = -1;
+        image_bboxes[instance_idx * 4 + 1] = -1;
+        image_bboxes[instance_idx * 4 + 2] = -1;
+        image_bboxes[instance_idx * 4 + 3] = -1;
+        return;
+    }
+    
+    // Scale coordinates from mask space to image space
+    image_bboxes[instance_idx * 4 + 0] = (x_min * image_width) / mask_width;
+    image_bboxes[instance_idx * 4 + 1] = (y_min * image_height) / mask_height;
+    image_bboxes[instance_idx * 4 + 2] = ((x_max + 1) * image_width) / mask_width - 1;
+    image_bboxes[instance_idx * 4 + 3] = ((y_max + 1) * image_height) / mask_height - 1;
+    
+    // Clamp to image bounds
+    image_bboxes[instance_idx * 4 + 0] = max(0, min(image_width - 1, image_bboxes[instance_idx * 4 + 0]));
+    image_bboxes[instance_idx * 4 + 1] = max(0, min(image_height - 1, image_bboxes[instance_idx * 4 + 1]));
+    image_bboxes[instance_idx * 4 + 2] = max(0, min(image_width - 1, image_bboxes[instance_idx * 4 + 2]));
+    image_bboxes[instance_idx * 4 + 3] = max(0, min(image_height - 1, image_bboxes[instance_idx * 4 + 3]));
+}
