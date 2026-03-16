@@ -252,8 +252,9 @@ if (activeInferenceMode.load() == training::InferenceMode::Label &&
                 static_cast<uint8_t>(std::clamp(config.training_sam3_box_b, 0, 255))
             );
             
-            // Thickness is already clamped by WriteSam3ConfigFloat (0.5f - 5.0f)
-            const float thickness = config.training_sam3_box_thickness;
+            // Thickness is clamped by WriteSam3ConfigFloat (0.5f - 5.0f), but clamp again for safety
+            // in case config was manually edited or loaded from an old file
+            const float thickness = std::clamp(config.training_sam3_box_thickness, 0.5f, 5.0f);
             
             for (const auto& detection : sam3Snapshot.result.boxes)
             {
