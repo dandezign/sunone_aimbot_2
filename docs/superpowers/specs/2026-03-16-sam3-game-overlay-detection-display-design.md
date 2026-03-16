@@ -132,7 +132,56 @@ file << "training_sam3_box_a = " << training_sam3_box_a << "\n"
 
 **File**: `sunone_aimbot_2/overlay/draw_training.cpp`
 
-Add controls to the existing `DrawSam3DetectionSection()` function (around line 344):
+**Step 1**: Add new fields to the `Sam3UiSnapshot` struct (around line 32):
+
+```cpp
+struct Sam3UiSnapshot {
+    std::string enginePath;
+    float maskThreshold = 0.5f;
+    int minMaskPixels = 64;
+    float minConfidence = 0.3f;
+    int minBoxWidth = 20;
+    int minBoxHeight = 20;
+    float minMaskFillRatio = 0.01f;
+    int maxDetections = 100;
+    bool drawPreviewBoxes = true;
+    bool drawConfidenceLabels = true;
+    // NEW: Game overlay box appearance
+    int boxA = 200;
+    int boxR = 0;
+    int boxG = 255;
+    int boxB = 100;
+    float boxThickness = 2.0f;
+};
+```
+
+**Step 2**: Update `ReadSam3UiSnapshot()` to populate the new fields (around line 45):
+
+```cpp
+Sam3UiSnapshot ReadSam3UiSnapshot()
+{
+    Sam3UiSnapshot snapshot;
+    snapshot.enginePath = config.training_sam3_engine_path;
+    snapshot.maskThreshold = config.training_sam3_mask_threshold;
+    snapshot.minMaskPixels = config.training_sam3_min_mask_pixels;
+    snapshot.minConfidence = config.training_sam3_min_confidence;
+    snapshot.minBoxWidth = config.training_sam3_min_box_width;
+    snapshot.minBoxHeight = config.training_sam3_min_box_height;
+    snapshot.minMaskFillRatio = config.training_sam3_min_mask_fill_ratio;
+    snapshot.maxDetections = config.training_sam3_max_detections;
+    snapshot.drawPreviewBoxes = config.training_sam3_draw_preview_boxes;
+    snapshot.drawConfidenceLabels = config.training_sam3_draw_confidence_labels;
+    // NEW:
+    snapshot.boxA = config.training_sam3_box_a;
+    snapshot.boxR = config.training_sam3_box_r;
+    snapshot.boxG = config.training_sam3_box_g;
+    snapshot.boxB = config.training_sam3_box_b;
+    snapshot.boxThickness = config.training_sam3_box_thickness;
+    return snapshot;
+}
+```
+
+**Step 3**: Add controls to the existing `DrawSam3DetectionSection()` function (around line 344), using the existing helper pattern:
 
 ```cpp
 // Box appearance section
@@ -141,30 +190,32 @@ ImGui::SeparatorText("Game Overlay Appearance");
 ImGui::Text("Box Color (ARGB):");
 ImGui::SameLine();
 
-// Alpha
+// Alpha (0-255)
 ImGui::PushItemWidth(60);
-if (ImGui::SliderInt("A##sam3_box_a", &config.training_sam3_box_a, 0, 255))
-    OverlayConfig_MarkDirty();
+ImGui::SliderInt("A##sam3_box_a", &snapshot.boxA, 0, 255);
 ImGui::SameLine();
 
-// Red
-if (ImGui::SliderInt("R##sam3_box_r", &config.training_sam3_box_r, 0, 255))
-    OverlayConfig_MarkDirty();
+// Red (0-255)
+ImGui::SliderInt("R##sam3_box_r", &snapshot.boxR, 0, 255);
 ImGui::SameLine();
 
-// Green
-if (ImGui::SliderInt("G##sam3_box_g", &config.training_sam3_box_g, 0, 255))
-    OverlayConfig_MarkDirty();
+// Green (0-255)
+ImGui::SliderInt("G##sam3_box_g", &snapshot.boxG, 0, 255);
 ImGui::SameLine();
 
-// Blue
-if (ImGui::SliderInt("B##sam3_box_b", &config.training_sam3_box_b, 0, 255))
-    OverlayConfig_MarkDirty();
+// Blue (0-255)
+ImGui::SliderInt("B##sam3_box_b", &snapshot.boxB, 0, 255);
 ImGui::PopItemWidth();
 
-// Thickness
-if (ImGui::SliderFloat("Thickness", &config.training_sam3_box_thickness, 0.5f, 5.0f, "%.1f"))
-    OverlayConfig_MarkDirty();
+// Thickness (0.5 - 5.0)
+ImGui::SliderFloat("Thickness", &snapshot.boxThickness, 0.5f, 5.0f, "%.1f");
+
+// Write back using helper functions
+WriteSam3ConfigInt(config.training_sam3_box_a, snapshot.boxA, 0, 255);
+WriteSam3ConfigInt(config.training_sam3_box_r, snapshot.boxR, 0, 255);
+WriteSam3ConfigInt(config.training_sam3_box_g, snapshot.boxG, 0, 255);
+WriteSam3ConfigInt(config.training_sam3_box_b, snapshot.boxB, 0, 255);
+WriteSam3ConfigFloat(config.training_sam3_box_thickness, snapshot.boxThickness, 0.5f, 5.0f);
 ```
 
 ### 3. Rendering Code
@@ -263,13 +314,13 @@ if (activeInferenceMode.load() == training::InferenceMode::Label &&
 
 ### 4. Required Includes
 
-The following headers are needed. The `training_sam3_runtime.h` header transitively includes `training_inference_mode.h`:
+The following header is needed. Note: the codebase uses paths relative to `${SRC_DIR}`:
 
 ```cpp
-#include "sunone_aimbot_2/training/training_sam3_runtime.h"  // For GetTrainingLatestPreviewOverlaySnapshot(), InferenceMode
+#include "training/training_sam3_runtime.h"  // For GetTrainingLatestPreviewOverlaySnapshot(), InferenceMode
 ```
 
-**Note**: The `ARGB()` macro is defined in `overlay/Game_overlay.h:13` as:
+**Note**: The `ARGB()` function is defined in `overlay/Game_overlay.h:13` as:
 ```cpp
 inline constexpr uint32_t ARGB(uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
     return (uint32_t(a) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
