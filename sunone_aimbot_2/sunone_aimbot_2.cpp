@@ -1936,6 +1936,87 @@ static void gameOverlayRenderLoop()
             }
         }
 
+        // SAM3 DETECTION BOXES (Label Mode)
+        // Note: activeInferenceMode is std::atomic<training::InferenceMode> (see line 43)
+        if (activeInferenceMode.load() == training::InferenceMode::Label &&
+            config.training_sam3_draw_preview_boxes)
+        {
+            const auto sam3Snapshot = training::GetTrainingLatestPreviewOverlaySnapshot();
+            
+            if (sam3Snapshot.valid && sam3Snapshot.result.success && 
+                !sam3Snapshot.result.boxes.empty() && !sam3Snapshot.frame.empty())
+            {
+                const int sam3FrameW = sam3Snapshot.frame.cols;
+                const int sam3FrameH = sam3Snapshot.frame.rows;
+                
+                if (sam3FrameW > 0 && sam3FrameH > 0)
+                {
+                    // Scale from SAM3 frame coordinates to screen coordinates
+                    const float sam3ScaleX = static_cast<float>(regionW) / static_cast<float>(sam3FrameW);
+                    const float sam3ScaleY = static_cast<float>(regionH) / static_cast<float>(sam3FrameH);
+                    
+                    // Build color using ARGB() helper (defined in Game_overlay.h)
+                    const uint32_t boxCol = ARGB(
+                        static_cast<uint8_t>(std::clamp(config.training_sam3_box_a, 0, 255)),
+                        static_cast<uint8_t>(std::clamp(config.training_sam3_box_r, 0, 255)),
+                        static_cast<uint8_t>(std::clamp(config.training_sam3_box_g, 0, 255)),
+                        static_cast<uint8_t>(std::clamp(config.training_sam3_box_b, 0, 255))
+                    );
+                    
+                    // Thickness is clamped by WriteSam3ConfigFloat (0.5f - 5.0f), but clamp again for safety
+                    // in case config was manually edited or loaded from an old file
+                    const float thickness = std::clamp(config.training_sam3_box_thickness, 0.5f, 5.0f);
+                    
+                    for (const auto& detection : sam3Snapshot.result.boxes)
+                    {
+                        const cv::Rect& box = detection.rect;
+                        
+                        if (box.width <= 0 || box.height <= 0) continue;
+                        
+                        // Transform to screen coordinates
+                        float x = baseX + static_cast<float>(box.x) * sam3ScaleX;
+                        float y = baseY + static_cast<float>(box.y) * sam3ScaleY;
+                        float w = static_cast<float>(box.width) * sam3ScaleX;
+                        float h = static_cast<float>(box.height) * sam3ScaleY;
+                        
+                        // Cull boxes outside the detection region
+                        if (x + w < baseX || y + h < baseY ||
+                            x > baseX + regionW || y > baseY + regionH)
+                            continue;
+                        
+                        // Draw the bounding box
+                        gameOverlayPtr->AddRect({ x, y, w, h }, boxCol, thickness);
+                        
+                        // Draw confidence label
+                        if (config.training_sam3_draw_confidence_labels)
+                        {
+                            wchar_t confLabel[16];
+                            swprintf(confLabel, sizeof(confLabel) / sizeof(wchar_t), L"%.2f", detection.confidence);
+                            
+                            const uint32_t textCol = ARGB(230, 255, 255, 255);
+                            const float textY = std::max(static_cast<float>(baseY), y - 16.0f);
+                            
+                            gameOverlayPtr->AddText(x + 2.0f, textY, confLabel, 15.0f, textCol);
+                        }
+                        
+                        // Draw class name label
+                        if (!config.training_sam3_preset_class.empty())
+                        {
+                            const uint32_t classCol = ARGB(230, 255, 220, 100);
+                            const float classY = y + h + 2.0f;
+                            
+                            // Convert std::string to std::wstring
+                            // Note: ASCII-only; for UTF-8, would need MultiByteToWideChar
+                            std::wstring className(config.training_sam3_preset_class.begin(), 
+                                                  config.training_sam3_preset_class.end());
+                            
+                            gameOverlayPtr->AddText(x + 2.0f, classY, className, 15.0f, classCol);
+                        }
+                    }
+                }
+            }
+        }
+
         // FUTURE POINTS
         if (config.game_overlay_draw_future && !futurePts.empty())
         {
