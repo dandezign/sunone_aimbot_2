@@ -8,6 +8,24 @@
 
 Add bounding box extraction capability to the SAM3TensorRT C++ implementation. The system will extract bounding boxes from instance segmentation masks using a custom CUDA kernel, support YOLO format output for training data generation, and integrate with the existing training pipeline.
 
+## Existing Code
+
+### Current SAM3_PCS_RESULT Struct
+
+The existing struct in `SAM3TensorRT/cpp/include/sam3.hpp`:
+
+```cpp
+// CURRENT (never populated)
+typedef struct {
+    float score;
+    int box_x, box_y, box_w, box_h;  // Defined but never set
+    std::vector<int> mask_x;          // Was intended for contour X coords
+    std::vector<int> mask_y;          // Was intended for contour Y coords
+} SAM3_PCS_RESULT;
+```
+
+**Changes:** Extend the struct with new fields for mask coordinates, class ID, and rename contour fields for clarity.
+
 ## Requirements
 
 ### Functional Requirements
@@ -17,7 +35,7 @@ Add bounding box extraction capability to the SAM3TensorRT C++ implementation. T
 3. **FR3:** Return bounding boxes in both original image coordinates and mask coordinates (288x288)
 4. **FR4:** Filter detections by confidence threshold and minimum box area
 5. **FR5:** Save YOLO label files to `scripts/training/datasets/game/labels/`
-6. **FR6:** Support class name to ID mapping via `predefined_classes.txt`
+6. **FR6:** Support class name to ID mapping via `scripts/training/predefined_classes.txt`
 
 ### Non-Functional Requirements
 
@@ -36,36 +54,42 @@ Add bounding box extraction capability to the SAM3TensorRT C++ implementation. T
 ### Data Structures
 
 ```cpp
-// sam3.hpp - Updated struct
+// SAM3TensorRT/cpp/include/sam3.hpp - Updated struct
 typedef struct {
     float score;           // Confidence from sigmoid of mask mean
-    int class_id;          // Mapped from prompt/class argument
+    int class_id;          // NEW: Mapped from prompt/class argument
     
-    // Bounding box in ORIGINAL IMAGE coordinates
+    // Bounding box in ORIGINAL IMAGE coordinates (now populated)
     int box_x, box_y, box_w, box_h;
     
-    // Bounding box in MASK coordinates (288x288 space)
+    // NEW: Bounding box in MASK coordinates (288x288 space)
     int mask_x, mask_y, mask_w, mask_h;
     
-    // Optional: contour points for polygon export
+    // Renamed for clarity (was mask_x, mask_y)
     std::vector<int> contour_x;
     std::vector<int> contour_y;
 } SAM3_PCS_RESULT;
 
-// New enum for backend selection
+// NEW: Enum for backend selection
 typedef enum {
     BBOX_BACKEND_OPENCV_CPU,    // Fallback, simpler
     BBOX_BACKEND_OPENCV_CUDA,   // Uses cv::cuda::GpuMat
     BBOX_BACKEND_CUDA_KERNEL    // Custom CUDA kernel (fastest)
 } SAM3_BBOX_BACKEND;
 
-// New struct for extraction parameters
+// NEW: Struct for extraction parameters
 typedef struct {
     SAM3_BBOX_BACKEND backend = BBOX_BACKEND_CUDA_KERNEL;
-    float score_threshold = 0.5f;      // Filter by confidence
+    float score_threshold = 0.5f;      // Filter results by instance confidence (post-kernel)
     int min_box_area = 100;            // Filter tiny boxes (pixels^2)
     bool include_contours = false;     // Export polygon points
 } SAM3_BBOX_OPTIONS;
+```
+
+**Note on thresholds:**
+- `prob_threshold` (kernel parameter): Used to binarize mask pixels for bbox computation
+- `score_threshold` (BBOX_OPTIONS): Used to filter entire instances from results based on mean confidence
+- `min_box_area` (BBOX_OPTIONS): Filters out degenerate bboxes (0-width/height or tiny detections)
 ```
 
 ### API Design
@@ -75,14 +99,16 @@ class SAM3_PCS {
 public:
     // Existing methods remain unchanged
     
-    // New methods
+    // NEW: Set class mapping for YOLO output
     void set_class_id(int class_id);
     
+    // NEW: Main bounding box extraction method
     std::vector<SAM3_PCS_RESULT> extract_bounding_boxes(
         const cv::Size& original_size,
         const SAM3_BBOX_OPTIONS& options = SAM3_BBOX_OPTIONS{}
     );
     
+    // NEW: Convenience method for YOLO output
     bool save_yolo_labels(
         const std::string& image_path,
         const cv::Size& original_size,
@@ -90,7 +116,7 @@ public:
     );
 
 private:
-    // New internal buffers
+    // NEW: Internal buffers for bbox computation
     int* d_mask_bboxes;        // Device: [200, 4] mask-space bboxes
     int* d_image_bboxes;       // Device: [200, 4] image-space bboxes
     float* d_instance_scores;  // Device: [200] confidence scores
@@ -100,16 +126,42 @@ private:
     int _current_class_id = 0;
     
     // Backend implementations
-    std::vector<SAM3_PCS_RESULT> extract_bboxes_cuda_kernel(...);
-    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cuda(...);
-    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cpu(...);
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_cuda_kernel(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cuda(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_opencv_cpu(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
 };
 ```
+
+### Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| No instances found (all filtered) | Return empty `std::vector<SAM3_PCS_RESULT>` |
+| Class name not in predefined_classes.txt | Log error to stderr, return -1 from `load_class_id_from_file()`, CLI exits with code 1 |
+| Output directory doesn't exist | `save_yolo_labels()` creates it via `std::filesystem::create_directories()` |
+| Output directory not writable | `save_yolo_labels()` returns `false`, logs error to stderr |
+| CUDA memory allocation fails | Throw `std::runtime_error` with CUDA error message |
+| `infer_on_image()` not called first | Return empty vector (no mask data available) |
+
+### Buffer Management
+
+- Buffers (`d_mask_bboxes`, `d_image_bboxes`, etc.) are allocated once in the `SAM3_PCS` constructor and reused for all subsequent calls to `extract_bounding_boxes()`.
+- Destructor frees all allocated GPU and host memory.
+- No re-allocation on repeated calls — buffers are fixed-size for 200 instances.
 
 ### CUDA Kernels
 
 ```cpp
-// prepost.cuh - New kernel declarations
+// SAM3TensorRT/cpp/include/prepost.cuh - New kernel declarations
 
 __global__ void compute_bboxes_from_masks(
     const float* __restrict__ mask_logits,  // [1, 200, 288, 288]
@@ -147,6 +199,40 @@ Shared memory per block:
 - int[4] for bbox (x_min, y_min, x_max, y_max)
 - float for score accumulator
 - int for pixel count above threshold
+
+Score calculation: Mean confidence is computed from ALL pixels in the mask, not just those above threshold. This provides a quality metric for the entire instance detection.
+```
+
+### Bbox Format Conversion
+
+The CUDA kernel outputs `[x_min, y_min, x_max, y_max]` for efficient atomic operations. This is converted to `[x, y, w, h]` format on the CPU after copying results:
+
+```cpp
+// Conversion in extract_bboxes_cuda_kernel()
+for (int i = 0; i < num_instances; ++i) {
+    int x_min = h_bbox_buffer[i * 4 + 0];
+    int y_min = h_bbox_buffer[i * 4 + 1];
+    int x_max = h_bbox_buffer[i * 4 + 2];
+    int y_max = h_bbox_buffer[i * 4 + 3];
+    
+    SAM3_PCS_RESULT result;
+    result.box_x = x_min;
+    result.box_y = y_min;
+    result.box_w = x_max - x_min;
+    result.box_h = y_max - y_min;
+    // ... same for mask coords
+}
+```
+
+### Utility Functions
+
+```cpp
+// Standalone utility in sam3_pcs_app.cpp (not a class member)
+// Returns class ID (0-indexed) or -1 if not found
+int load_class_id_from_file(
+    const std::string& class_name,
+    const std::string& classes_file_path = "scripts/training/predefined_classes.txt"
+);
 ```
 
 ### YOLO Output Format
@@ -178,17 +264,21 @@ sam3_pcs_app images/ engine.engine -prompt "helmet" -class "head"
 sam3_pcs_app images/ engine.engine -prompt "person"
 ```
 
+**CLI Arguments:**
+- `-prompt "text"`: The text prompt passed to CLIP tokenizer for semantic segmentation. Determines what objects to detect (e.g., "person", "car", "helmet").
+- `-class "name"`: The YOLO class name to assign to detections. If provided, YOLO label files are saved. If omitted, only visualization is output.
+
 ## File Changes
 
 | File | Action | Changes |
 |------|--------|---------|
-| `cpp/include/sam3.hpp` | Modify | Add `SAM3_BBOX_BACKEND`, `SAM3_BBOX_OPTIONS`, update `SAM3_PCS_RESULT` |
-| `cpp/include/sam3.cuh` | Modify | Add method declarations, new private members |
-| `cpp/include/prepost.cuh` | Modify | Add kernel declarations |
-| `cpp/src/sam3/sam3_trt/prepost.cu` | Modify | Implement CUDA kernels |
-| `cpp/src/sam3/sam3_trt/sam3.cu` | Modify | Implement methods, allocate/free buffers |
-| `cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` | Modify | Add `-prompt` and `-class` CLI arguments |
-| `cpp/CMakeLists.txt` | Modify | Add OpenCV CUDA include path |
+| `SAM3TensorRT/cpp/include/sam3.hpp` | Modify | Add `SAM3_BBOX_BACKEND`, `SAM3_BBOX_OPTIONS`, extend `SAM3_PCS_RESULT` |
+| `SAM3TensorRT/cpp/include/sam3.cuh` | Modify | Add method declarations, new private members |
+| `SAM3TensorRT/cpp/include/prepost.cuh` | Modify | Add kernel declarations |
+| `SAM3TensorRT/cpp/src/sam3/sam3_trt/prepost.cu` | Modify | Implement CUDA kernels |
+| `SAM3TensorRT/cpp/src/sam3/sam3_trt/sam3.cu` | Modify | Implement methods, allocate/free buffers |
+| `SAM3TensorRT/cpp/src/sam3/sam3_apps/sam3_pcs_app.cpp` | Modify | Add `-prompt` and `-class` CLI arguments |
+| `SAM3TensorRT/cpp/CMakeLists.txt` | Modify | Add OpenCV CUDA include path |
 
 ## Implementation Phases
 
@@ -200,7 +290,7 @@ sam3_pcs_app images/ engine.engine -prompt "person"
 
 ### Phase 2: YOLO Output
 1. Implement `save_yolo_labels()` method
-2. Add `load_class_id_from_file()` utility
+2. Add `load_class_id_from_file()` utility reading `scripts/training/predefined_classes.txt`
 3. Update CLI argument parsing for `-prompt` and `-class`
 
 ### Phase 3: Alternative Backends (Optional)
@@ -209,9 +299,32 @@ sam3_pcs_app images/ engine.engine -prompt "person"
 
 ## Testing
 
-1. **Unit tests:** Verify bbox extraction against known mask patterns
-2. **Integration tests:** Run full pipeline on test images, verify YOLO output format
-3. **Performance tests:** Measure extraction time with CUDA kernel backend
+### Unit Tests
+1. **Test: Sigmoid computation**
+   - Input: Known logit values (e.g., 0.0, 1.0, -1.0)
+   - Expected: Correct sigmoid values (0.5, 0.731, 0.269)
+
+2. **Test: Bbox from simple mask**
+   - Input: 288x288 mask with single rectangle (50,50) to (100,100) at prob=1.0
+   - Expected: bbox = (50, 50, 50, 50) in mask coords
+
+3. **Test: Coordinate scaling**
+   - Input: mask bbox (144, 144, 28, 28) at 288x288, image size 1920x1080
+   - Expected: image bbox ≈ (960, 540, 186, 105)
+
+### Integration Tests
+1. **Test: Full pipeline with known image**
+   - Input: Test image with person, prompt "person", class "player"
+   - Expected: YOLO label file created with correct format
+
+2. **Test: Empty detection**
+   - Input: Image with no matching objects
+   - Expected: Empty vector returned, no label file created
+
+### Performance Tests
+1. **Benchmark: CUDA kernel extraction**
+   - Input: 200 instances of 288x288 masks
+   - Expected: < 2ms total extraction time
 
 ## Risks and Mitigations
 
@@ -219,13 +332,15 @@ sam3_pcs_app images/ engine.engine -prompt "person"
 |------|--------|------------|
 | OpenCV CUDA build compatibility | Medium | Test with provided OpenCV build path |
 | Memory leaks in new buffers | Medium | Add comprehensive destructor cleanup |
-| Class mapping errors | Low | Validate class names against predefined_classes.txt |
-| Coordinate scaling errors | Medium | Test with various image sizes |
+| Class mapping errors | Low | Validate class names against predefined_classes.txt, return error code |
+| Coordinate scaling errors | Medium | Test with various image sizes, verify math |
+| CUDA allocation failure | Medium | Wrap allocations in try-catch with clear error message |
 
 ## Success Criteria
 
 1. Bounding boxes extracted correctly from instance masks
 2. YOLO labels saved in correct format and location
 3. Extraction completes in < 2ms per image
-4. No memory leaks
+4. No memory leaks (verified via cuda-memcheck or similar)
 5. CLI works with `-prompt` and `-class` arguments
+6. All edge cases handled gracefully (empty detections, missing files, etc.)
