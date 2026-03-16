@@ -683,6 +683,11 @@ training_sam3_presets_dir = "models/presets";
     training_sam3_preset_class = get_string("training_sam3_preset_class", "head");
     training_sam3_preset_hot_reload = get_bool("training_sam3_preset_hot_reload", true);
     training_sam3_presets_dir = get_string("training_sam3_presets_dir", "models/presets");
+    training_sam3_box_a = get_int("training_sam3_box_a", 200);
+    training_sam3_box_r = get_int("training_sam3_box_r", 0);
+    training_sam3_box_g = get_int("training_sam3_box_g", 255);
+    training_sam3_box_b = get_int("training_sam3_box_b", 100);
+    training_sam3_box_thickness = get_float("training_sam3_box_thickness", 2.0f);
 
     return true;
 }
