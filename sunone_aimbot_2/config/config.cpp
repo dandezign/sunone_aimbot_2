@@ -950,7 +950,12 @@ bool Config::saveConfig(const std::string& filename)
         << "training_sam3_preset_file = " << training_sam3_preset_file << "\n"
         << "training_sam3_preset_class = " << training_sam3_preset_class << "\n"
         << "training_sam3_preset_hot_reload = " << (training_sam3_preset_hot_reload ? "true" : "false") << "\n"
-        << "training_sam3_presets_dir = " << training_sam3_presets_dir << "\n\n";
+        << "training_sam3_presets_dir = " << training_sam3_presets_dir << "\n\n"
+        << "training_sam3_box_a = " << training_sam3_box_a << "\n"
+        << "training_sam3_box_r = " << training_sam3_box_r << "\n"
+        << "training_sam3_box_g = " << training_sam3_box_g << "\n"
+        << "training_sam3_box_b = " << training_sam3_box_b << "\n"
+        << "training_sam3_box_thickness = " << training_sam3_box_thickness << "\n\n";
 
     // Active game
     file << "# Active game profile\n";
