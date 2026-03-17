@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
 #include <sstream>
 #include <thread>
 
@@ -275,9 +276,48 @@ bool build_prompt_from_arg(const std::string &arg, std::vector<int64_t> &ids,
 }
 } // namespace
 
+// Draw bounding boxes on image for preview mode
+void draw_bounding_boxes(cv::Mat& img, const std::vector<SAM3_PCS_RESULT>& detections) {
+  for (const auto& det : detections) {
+    // Draw rectangle
+    cv::rectangle(img, 
+                  cv::Point(det.box_x, det.box_y),
+                  cv::Point(det.box_x + det.box_w, det.box_y + det.box_h),
+                  cv::Scalar(0, 255, 0), 2);
+    
+    // Draw label with class ID and score
+    std::string label = "ID:" + std::to_string(det.class_id) + 
+                        " " + std::to_string(int(det.score * 100)) + "%";
+    int baseline = 0;
+    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+    
+    // Draw label background
+    cv::rectangle(img,
+                  cv::Point(det.box_x, det.box_y - label_size.height - 5),
+                  cv::Point(det.box_x + label_size.width, det.box_y),
+                  cv::Scalar(0, 255, 0), cv::FILLED);
+    
+    // Draw label text
+    cv::putText(img, label, cv::Point(det.box_x, det.box_y - 3),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+  }
+}
+
+// Parse backend string to enum
+SAM3_BBOX_BACKEND parse_backend(const std::string& backend_str) {
+  if (backend_str == "opencv_cuda") {
+    return BBOX_BACKEND_OPENCV_CUDA;
+  } else if (backend_str == "opencv_cpu") {
+    return BBOX_BACKEND_OPENCV_CPU;
+  } else {
+    return BBOX_BACKEND_CUDA_KERNEL;  // default
+  }
+}
+
 void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
                       const SAM3_VISUALIZATION vis, const std::string outfile,
-                      bool benchmark_run, bool save_yolo) {
+                      bool benchmark_run, bool save_yolo, bool preview_mode,
+                      SAM3_BBOX_BACKEND backend) {
   bool success = pcs.infer_on_image(img, result, vis);
 
   if (benchmark_run) {
@@ -291,21 +331,35 @@ void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
     cv::imwrite(outfile, result);
   }
 
-  if (save_yolo) {
-    SAM3_BBOX_OPTIONS bbox_opts;
-    bbox_opts.backend = BBOX_BACKEND_CUDA_KERNEL;
-    bbox_opts.score_threshold = 0.5f;
-    bbox_opts.min_box_area = 100;
+  // Extract bounding boxes with specified backend
+  SAM3_BBOX_OPTIONS bbox_opts;
+  bbox_opts.backend = backend;
+  bbox_opts.score_threshold = 0.5f;
+  bbox_opts.min_box_area = 100;
 
+  auto detections = pcs.extract_bounding_boxes(img.size(), bbox_opts);
+
+  if (preview_mode && !detections.empty()) {
+    // Draw bounding boxes on original image and save preview
+    cv::Mat preview = img.clone();
+    draw_bounding_boxes(preview, detections);
+    
+    std::filesystem::path preview_path = outfile;
+    preview_path.replace_filename("preview_" + preview_path.filename().string());
+    cv::imwrite(preview_path.string(), preview);
+    std::cout << "Preview saved: " << preview_path << " (" << detections.size() << " detections)" << std::endl;
+  } else if (save_yolo && !detections.empty()) {
+    // Save YOLO labels
     pcs.save_yolo_labels(outfile, img.size(), bbox_opts);
   }
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
-    std::cout << "Usage: ./sam3_pcs_app indir engine_path.engine "
-                 "[-prompt <text>] [-class <class_name>] [benchmark=0|1]"
-              << std::endl;
+    std::cout << "Usage: ./sam3_pcs_app indir engine_path.engine\n"
+              << "       [-prompt <text>] [-class <class_name>]\n"
+              << "       [-preview] [-backend <cuda|opencv_cuda|opencv_cpu>]\n"
+              << "       [benchmark=0|1]" << std::endl;
     return 0;
   }
 
@@ -314,6 +368,8 @@ int main(int argc, char *argv[]) {
   bool benchmark = false;
   std::string prompt_arg = "person";
   std::string class_arg = "";
+  std::string backend_arg = "cuda";  // default to CUDA kernel
+  bool preview_mode = false;
 
   for (int argi = 3; argi < argc; ++argi) {
     std::string arg = argv[argi];
@@ -333,6 +389,16 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (arg == "-backend" && argi + 1 < argc) {
+      backend_arg = argv[++argi];
+      continue;
+    }
+
+    if (arg == "-preview") {
+      preview_mode = true;
+      continue;
+    }
+
     if (arg.rfind("prompt=", 0) == 0 || arg.rfind("ids:", 0) == 0 ||
         arg == "person") {
       prompt_arg = arg;
@@ -343,6 +409,11 @@ int main(int argc, char *argv[]) {
   }
 
   std::cout << "Benchmarking: " << benchmark << std::endl;
+  std::cout << "Backend: " << backend_arg << std::endl;
+  std::cout << "Preview mode: " << (preview_mode ? "enabled" : "disabled") << std::endl;
+
+  // Parse backend
+  SAM3_BBOX_BACKEND backend = parse_backend(backend_arg);
 
   auto start = std::chrono::system_clock::now();
   auto end = std::chrono::system_clock::now();
@@ -426,7 +497,7 @@ int main(int argc, char *argv[]) {
         }
       }
       start = std::chrono::system_clock::now();
-      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark, save_yolo);
+      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark, save_yolo, preview_mode, backend);
       num_images_read++;
       end = std::chrono::system_clock::now();
       diff = end - start;
