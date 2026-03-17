@@ -125,18 +125,18 @@ target_link_libraries(sam3_trt
     ${OpenCV_LIBRARIES}
     ${FS_LIBS})
 
-add_executable(sam3_pcs_app
+add_executable(sam3
   src/sam3/sam3_apps/sam3_pcs_app.cpp)
 
 set(SAM3_TOKENIZER_SCRIPT_PATH "${SAM3_WORKSPACE_ROOT}/SAM3TensorRT/python/tokenize_prompt.py")
 
-target_compile_definitions(sam3_pcs_app PRIVATE
+target_compile_definitions(sam3 PRIVATE
   SAM3_DEFAULT_TOKENIZER_SCRIPT="${SAM3_TOKENIZER_SCRIPT_PATH}")
 
-set_target_properties(sam3_pcs_app PROPERTIES
+set_target_properties(sam3 PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON)
 
-target_link_libraries(sam3_pcs_app
+target_link_libraries(sam3
   PUBLIC
     sam3_trt
     ${OpenCV_LIBRARIES}
@@ -144,14 +144,14 @@ target_link_libraries(sam3_pcs_app
     ${FS_LIBS})
 
 if(WIN32)
-  sam3_copy_if_exists(sam3_pcs_app "${SAM3_TOKENIZER_SCRIPT_PATH}")
-  sam3_copy_if_exists(sam3_pcs_app "${TensorRT_ROOT}/bin/nvinfer_10.dll")
-  sam3_copy_if_exists(sam3_pcs_app "${TensorRT_ROOT}/bin/nvonnxparser_10.dll")
-  sam3_copy_if_exists(sam3_pcs_app "${TensorRT_ROOT}/bin/nvinfer_plugin_10.dll")
+  sam3_copy_if_exists(sam3 "${SAM3_TOKENIZER_SCRIPT_PATH}")
+  sam3_copy_if_exists(sam3 "${TensorRT_ROOT}/bin/nvinfer_10.dll")
+  sam3_copy_if_exists(sam3 "${TensorRT_ROOT}/bin/nvonnxparser_10.dll")
+  sam3_copy_if_exists(sam3 "${TensorRT_ROOT}/bin/nvinfer_plugin_10.dll")
 
   file(GLOB _trt_builder_resources "${TensorRT_ROOT}/bin/nvinfer_builder_resource_*.dll")
   foreach(_resource IN LISTS _trt_builder_resources)
-    sam3_copy_if_exists(sam3_pcs_app "${_resource}")
+    sam3_copy_if_exists(sam3 "${_resource}")
   endforeach()
 
   file(GLOB _opencv_world_dll_candidates
@@ -159,7 +159,7 @@ if(WIN32)
   if(_opencv_world_dll_candidates)
     list(SORT _opencv_world_dll_candidates COMPARE NATURAL ORDER DESCENDING)
     list(GET _opencv_world_dll_candidates 0 _opencv_world_dll)
-    sam3_copy_if_exists(sam3_pcs_app "${_opencv_world_dll}")
+    sam3_copy_if_exists(sam3 "${_opencv_world_dll}")
   endif()
 
   if(DEFINED CUDAToolkit_BIN_DIR)
@@ -170,7 +170,7 @@ if(WIN32)
       "${CUDAToolkit_BIN_DIR}/cublasLt64_*.dll"
       "${CUDAToolkit_BIN_DIR}/cufft64_*.dll")
     foreach(_cuda_dll IN LISTS _cuda_runtime_dlls)
-      sam3_copy_if_exists(sam3_pcs_app "${_cuda_dll}")
+      sam3_copy_if_exists(sam3 "${_cuda_dll}")
     endforeach()
   endif()
 
@@ -192,9 +192,43 @@ if(WIN32)
     file(GLOB_RECURSE _cudnn_dlls "${_cudnn_root}/cudnn64*.dll")
     if(_cudnn_dlls)
       foreach(_cudnn_dll IN LISTS _cudnn_dlls)
-        sam3_copy_if_exists(sam3_pcs_app "${_cudnn_dll}")
+        sam3_copy_if_exists(sam3 "${_cudnn_dll}")
       endforeach()
       break()
     endif()
   endforeach()
 endif()
+
+# ============================================
+# Model and Training Data Copy
+# ============================================
+
+# Source directories (from repo root)
+set(SAM3_MODELS_SOURCE "${SAM3_WORKSPACE_ROOT}/models")
+set(SAM3_TRAINING_SOURCE "${SAM3_WORKSPACE_ROOT}/sunone_aimbot_2/scripts/training")
+
+# Destination directories (in build output)
+set(SAM3_BUILD_OUTPUT "$<TARGET_FILE_DIR:sam3>")
+set(SAM3_MODELS_DEST "${SAM3_BUILD_OUTPUT}/models")
+set(SAM3_TRAINING_DEST "${SAM3_BUILD_OUTPUT}/training")
+set(SAM3_RESULTS_DEST "${SAM3_BUILD_OUTPUT}/results")
+
+# Post-build setup
+add_custom_command(TARGET sam3 POST_BUILD
+    # Create output directories
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_MODELS_DEST}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_TRAINING_DEST}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_RESULTS_DEST}"
+    
+    # Copy models if source exists
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${SAM3_MODELS_SOURCE}"
+        "${SAM3_MODELS_DEST}"
+    
+    # Copy training data
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${SAM3_TRAINING_SOURCE}"
+        "${SAM3_TRAINING_DEST}"
+    
+    COMMENT "Setting up models/ and training/ directories..."
+)
