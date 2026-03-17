@@ -1,6 +1,7 @@
 ---
 description: Performs deep, comprehensive code analysis with language-specific insights and detailed findings
 mode: subagent
+model: bailian-coding-plan/qwen3.5-plus
 tools:
   read: true
   write: false

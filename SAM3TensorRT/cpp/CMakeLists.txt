@@ -205,7 +205,7 @@ endif()
 
 # Source directories (from repo root)
 set(SAM3_MODELS_SOURCE "${SAM3_WORKSPACE_ROOT}/models")
-set(SAM3_TRAINING_SOURCE "${SAM3_WORKSPACE_ROOT}/sunone_aimbot_2/scripts/training")
+set(SAM3_TRAINING_SOURCE "${SAM3_WORKSPACE_ROOT}/scripts/training")
 
 # Destination directories (in build output)
 set(SAM3_BUILD_OUTPUT "$<TARGET_FILE_DIR:sam3>")
@@ -220,10 +220,12 @@ add_custom_command(TARGET sam3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_TRAINING_DEST}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_RESULTS_DEST}"
     
-    # Copy models if source exists
-    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-        "${SAM3_MODELS_SOURCE}"
-        "${SAM3_MODELS_DEST}"
+    # Copy only .engine files (TensorRT compiled models)
+    # Note: presets/ subdirectory is also needed
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_MODELS_DEST}/presets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SAM3_MODELS_SOURCE}/sam3_fp16.engine" "${SAM3_MODELS_DEST}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SAM3_MODELS_SOURCE}/yolo26n.engine" "${SAM3_MODELS_DEST}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different "${SAM3_MODELS_SOURCE}/presets" "${SAM3_MODELS_DEST}/presets"
     
     # Copy training data
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different

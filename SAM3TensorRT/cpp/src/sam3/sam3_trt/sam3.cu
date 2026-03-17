@@ -798,7 +798,7 @@ bool SAM3_PCS::save_yolo_labels(
     std::string label_filename = img_path.stem().string() + ".txt";
     
     std::filesystem::path label_dir = 
-        std::filesystem::current_path() / "scripts" / "training" / 
+        std::filesystem::current_path() / "training" / 
         "datasets" / "game" / "labels";
     
     std::filesystem::create_directories(label_dir);

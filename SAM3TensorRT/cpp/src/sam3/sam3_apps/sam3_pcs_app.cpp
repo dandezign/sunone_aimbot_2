@@ -473,11 +473,11 @@ int main(int argc, char *argv[]) {
   bool save_yolo = false;
 
   if (!class_arg.empty()) {
-    std::string classes_path = "scripts/training/predefined_classes.txt";
+    std::string classes_path = "training/predefined_classes.txt";
 
     if (!std::filesystem::exists(classes_path)) {
       classes_path = std::filesystem::current_path().string() + 
-                     "/scripts/training/predefined_classes.txt";
+                     "/training/predefined_classes.txt";
     }
 
     class_id = load_class_id_from_file(class_arg, classes_path);

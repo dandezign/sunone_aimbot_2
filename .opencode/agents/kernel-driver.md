@@ -1,3 +1,24 @@
+---
+description: Researches Windows kernel driver patterns for manual mapping, PTE-hook communication, physical memory access, stealth mechanisms, and kernel-user protocols.
+mode: subagent
+model: bailian-coding-plan/kimi-k2.5
+tools:
+  read: true
+  write: true
+  bash: true
+  grep: true
+  glob: true
+  skill: true
+  websearch: true
+  webfetch: true
+  mcp__context7__*: true
+permission:
+  edit: allow
+  bash: ask
+  webfetch: allow
+color: "#b02727"
+---
+
 # Kernel Driver Development Agent
 
 ## Role Definition
