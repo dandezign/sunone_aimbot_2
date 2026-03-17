@@ -105,10 +105,45 @@ Exports SAM3 to ONNX format with weight packing.
 
 **Behavior:**
 - Loads model from `models/sam3_weights/`
-- Uses `Sam3ONNXWrapper` for clean ONNX graph
+- Uses `Sam3ONNXWrapper` for clean ONNX graph with explicit outputs
 - Packs large weights into `.onnx.data` file (threshold: 500MB)
 - Removes temporary files after packing
 - Skips if `.onnx` + `.onnx.data` already exist
+
+**Sam3ONNXWrapper class (handles all 4 outputs):**
+```python
+class Sam3ONNXWrapper(torch.nn.Module):
+    def __init__(self, sam3):
+        super().__init__()
+        self.sam3 = sam3
+
+    def forward(self, pixel_values, input_ids, attention_mask):
+        outputs = self.sam3(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+        # Return all 4 outputs as tensors (required for TensorRT inference)
+        return (
+            outputs.pred_masks.contiguous(),    # [batch, num_queries, H, W]
+            outputs.pred_boxes.contiguous(),    # [batch, num_queries, 4] - xyxy normalized
+            outputs.pred_logits.contiguous(),   # [batch, num_queries] - confidence
+            outputs.semantic_seg.contiguous(),  # [batch, 1, H, W]
+        )
+```
+
+**torch.onnx.export call:**
+```python
+torch.onnx.export(
+    wrapper,
+    (pixel_values, input_ids, attention_mask),
+    onnx_path,
+    input_names=["pixel_values", "input_ids", "attention_mask"],
+    output_names=["pred_masks", "pred_boxes", "pred_logits", "semantic_seg"],
+    opset_version=17,
+    do_constant_folding=True,
+)
+```
 
 **Weight packing implementation:**
 ```python
@@ -129,6 +164,14 @@ onnx.save(model, str(final_onnx_path))
 **Output:**
 - `onnx_weights/sam3_dynamic.onnx` (~39MB)
 - `onnx_weights/sam3_dynamic.onnx.data` (~3.2GB)
+
+**ONNX model outputs (used for inference):**
+| Output | Shape | Description |
+|--------|-------|-------------|
+| `pred_masks` | `[1, 200, 288, 288]` | Segmentation masks for each query |
+| `pred_boxes` | `[1, 200, 4]` | Bounding boxes (xyxy normalized [0,1]) |
+| `pred_logits` | `[1, 200]` | Confidence scores per query |
+| `semantic_seg` | `[1, 1, 288, 288]` | Semantic segmentation output |
 
 ### 5. Engine Build Module (`pipeline/engine_build.py`)
 
