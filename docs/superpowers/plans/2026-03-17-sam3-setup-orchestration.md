@@ -249,30 +249,25 @@ git commit -m "feat(sam3): add pipeline/config.py with Sam3Config class"
 
 ---
 
-### Task 3: Create pipeline/__init__.py
+### Task 3: Create pipeline/__init__.py (empty)
 
 **Files:**
 - Create: `SAM3TensorRT/python/pipeline/__init__.py`
 
-- [ ] **Step 1: Write __init__.py with exports**
+- [ ] **Step 1: Create empty __init__.py**
 
 ```python
 # SAM3TensorRT/python/pipeline/__init__.py
 """SAM3 pipeline package for model setup orchestration."""
 
-from .config import Sam3Config
-from .download import Sam3Downloader
-from .onnx_export import Sam3Exporter
-from .engine_build import Sam3Builder
-
-__all__ = ["Sam3Config", "Sam3Downloader", "Sam3Exporter", "Sam3Builder"]
+# Exports will be added after all modules are created
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add SAM3TensorRT/python/pipeline/__init__.py
-git commit -m "feat(sam3): add pipeline/__init__.py with exports"
+git commit -m "feat(sam3): add pipeline/__init__.py (empty)"
 ```
 
 ---
@@ -1299,6 +1294,131 @@ git add .env
 git commit -m "feat(sam3): add SAM3 configuration to .env"
 ```
 
+**Note on Error Handling:** The following error handling features from the spec are deferred to a future iteration:
+- Disk space check (warn if < 10GB)
+- Network retry logic with exponential backoff
+- SHA256 hash validation for file integrity
+- Malformed .env line handling
+- CUDA version mismatch detection
+
+These can be added incrementally as needed.
+
+---
+
+### Task 11.5: Update pipeline/__init__.py with exports
+
+**Files:**
+- Modify: `SAM3TensorRT/python/pipeline/__init__.py`
+
+- [ ] **Step 1: Update __init__.py with all exports**
+
+```python
+# SAM3TensorRT/python/pipeline/__init__.py
+"""SAM3 pipeline package for model setup orchestration."""
+
+from .config import Sam3Config
+from .download import Sam3Downloader
+from .onnx_export import Sam3Exporter
+from .engine_build import Sam3Builder
+
+__all__ = ["Sam3Config", "Sam3Downloader", "Sam3Exporter", "Sam3Builder"]
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/python/pipeline/__init__.py
+git commit -m "feat(sam3): add exports to pipeline/__init__.py"
+```
+
+---
+
+### Task 11.6: Add unit tests (basic)
+
+**Note:** Full unit test coverage is deferred to a future iteration. This task creates basic smoke tests.
+
+**Files:**
+- Create: `SAM3TensorRT/python/tests/__init__.py`
+- Create: `SAM3TensorRT/python/tests/test_config.py`
+
+- [ ] **Step 1: Create tests directory and __init__.py**
+
+```bash
+mkdir -p SAM3TensorRT/python/tests
+```
+
+```python
+# SAM3TensorRT/python/tests/__init__.py
+"""Tests for SAM3 pipeline."""
+```
+
+- [ ] **Step 2: Write test_config.py**
+
+```python
+# SAM3TensorRT/python/tests/test_config.py
+"""Tests for Sam3Config."""
+
+import pytest
+from pathlib import Path
+
+from pipeline.config import Sam3Config
+
+
+def test_config_defaults():
+    """Test that Sam3Config has sensible defaults."""
+    config = Sam3Config()
+    
+    assert config.hf_repo == "facebook/sam3"
+    assert config.fp16 is True
+    assert config.onnx_filename == "sam3_dynamic.onnx"
+    assert config.engine_filename == "sam3_fp16.engine"
+
+
+def test_config_path_resolution():
+    """Test that relative paths are resolved to absolute."""
+    config = Sam3Config()
+    
+    assert config.models_dir.is_absolute()
+    assert config.onnx_output_dir.is_absolute()
+
+
+def test_config_from_env(monkeypatch):
+    """Test loading config from environment."""
+    monkeypatch.setenv("SAM3_HUGGINGFACE_REPO", "custom/sam3")
+    monkeypatch.setenv("HF_TOKEN", "test_token")
+    
+    config = Sam3Config.from_env()
+    
+    assert config.hf_repo == "custom/sam3"
+    assert config.hf_token == "test_token"
+
+
+def test_config_properties():
+    """Test config property accessors."""
+    config = Sam3Config()
+    
+    assert config.onnx_path.name == "sam3_dynamic.onnx"
+    assert config.onnx_data_path.name == "sam3_dynamic.onnx.data"
+    assert config.engine_path.name == "sam3_fp16.engine"
+    assert config.weights_dir.name == "sam3_weights"
+```
+
+- [ ] **Step 3: Run tests**
+
+```bash
+cd SAM3TensorRT/python
+pytest tests/test_config.py -v
+```
+
+Expected: All tests pass
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add SAM3TensorRT/python/tests/
+git commit -m "test(sam3): add basic unit tests for Sam3Config"
+```
+
 ---
 
 ## Verification
@@ -1360,7 +1480,7 @@ git commit -m "feat(sam3): complete SAM3 setup orchestration implementation"
 |------|-------------|-------|
 | 1 | Create utils.py | `pipeline/utils.py` |
 | 2 | Create config.py | `pipeline/config.py` |
-| 3 | Create __init__.py | `pipeline/__init__.py` |
+| 3 | Create __init__.py (empty) | `pipeline/__init__.py` |
 | 4 | Create download.py | `pipeline/download.py` |
 | 5 | Create onnx_export.py | `pipeline/onnx_export.py` |
 | 6 | Refactor onnxexport.py | `onnxexport.py` |
@@ -1369,4 +1489,11 @@ git commit -m "feat(sam3): complete SAM3 setup orchestration implementation"
 | 9 | Update CMakeLists.txt | `CMakeLists.txt` |
 | 10 | Create requirements.txt | `requirements.txt` |
 | 11 | Update .env | `.env` |
+| 11.5 | Update __init__.py with exports | `pipeline/__init__.py` |
+| 11.6 | Add unit tests | `tests/test_config.py` |
 | 12 | Verify | - |
+
+**Deferred to future iteration:**
+- Advanced error handling (disk space, retry logic, SHA256 validation)
+- Comprehensive unit test coverage for all modules
+- Integration tests
