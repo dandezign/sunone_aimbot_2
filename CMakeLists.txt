@@ -414,6 +414,16 @@ if(AIMBOT_COPY_RUNTIME_DLLS)
     endif()
 endif()
 
+# Copy SAM3 presets directory to build output
+if(EXISTS "${CMAKE_SOURCE_DIR}/models/presets")
+    add_custom_command(
+        TARGET ai
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/models/presets" "$<TARGET_FILE_DIR:ai>/models/presets"
+        VERBATIM
+    )
+endif()
+
 message(STATUS "Aimbot backend: ${AIMBOT_USE_CUDA}")
 message(STATUS "OpenCV include: ${AIMBOT_OPENCV_INCLUDE_DIR}")
 message(STATUS "OpenCV lib: ${AIMBOT_OPENCV_LIBRARY}")

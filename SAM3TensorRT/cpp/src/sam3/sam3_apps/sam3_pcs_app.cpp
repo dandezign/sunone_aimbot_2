@@ -162,8 +162,24 @@ bool tokenize_prompt_with_python(const std::string &prompt,
   const char *python_env = std::getenv("SAM3_TOKENIZER_PYTHON");
   const char *script_env = std::getenv("SAM3_TOKENIZER_SCRIPT");
 
-  const std::string python_cmd =
-      (python_env && *python_env) ? std::string(python_env) : "python";
+  // Use venv Python if available, otherwise fall back to py launcher or python
+  std::string python_cmd;
+  if (python_env && *python_env) {
+    python_cmd = python_env;
+  } else {
+    // Check for venv in current working directory
+    std::filesystem::path venv_python = std::filesystem::current_path() / ".venv" / "Scripts" / "python.exe";
+    if (std::filesystem::exists(venv_python)) {
+      python_cmd = venv_python.string();
+    } else {
+#ifdef _WIN32
+      python_cmd = "py";  // Windows Python launcher
+#else
+      python_cmd = "python";
+#endif
+    }
+  }
+  
   const std::string script_path =
       (script_env && *script_env) ? std::string(script_env)
                                   : std::string(SAM3_DEFAULT_TOKENIZER_SCRIPT);
@@ -279,27 +295,28 @@ bool build_prompt_from_arg(const std::string &arg, std::vector<int64_t> &ids,
 // Draw bounding boxes on image for preview mode
 void draw_bounding_boxes(cv::Mat& img, const std::vector<SAM3_PCS_RESULT>& detections) {
   for (const auto& det : detections) {
-    // Draw rectangle
+    // Draw rectangle (thicker line, green)
     cv::rectangle(img, 
                   cv::Point(det.box_x, det.box_y),
                   cv::Point(det.box_x + det.box_w, det.box_y + det.box_h),
-                  cv::Scalar(0, 255, 0), 2);
+                  cv::Scalar(0, 255, 0), 3);
     
     // Draw label with class ID and score
     std::string label = "ID:" + std::to_string(det.class_id) + 
                         " " + std::to_string(int(det.score * 100)) + "%";
     int baseline = 0;
-    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.7, 2, &baseline);
     
     // Draw label background
+    int label_y = std::max(det.box_y, label_size.height + 10);
     cv::rectangle(img,
-                  cv::Point(det.box_x, det.box_y - label_size.height - 5),
-                  cv::Point(det.box_x + label_size.width, det.box_y),
+                  cv::Point(det.box_x, label_y - label_size.height - 5),
+                  cv::Point(det.box_x + label_size.width, label_y),
                   cv::Scalar(0, 255, 0), cv::FILLED);
     
     // Draw label text
-    cv::putText(img, label, cv::Point(det.box_x, det.box_y - 3),
-                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+    cv::putText(img, label, cv::Point(det.box_x + 2, label_y - 3),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
   }
 }
 
@@ -317,7 +334,7 @@ SAM3_BBOX_BACKEND parse_backend(const std::string& backend_str) {
 void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
                       const SAM3_VISUALIZATION vis, const std::string outfile,
                       bool benchmark_run, bool save_yolo, bool preview_mode,
-                      SAM3_BBOX_BACKEND backend) {
+                      SAM3_BBOX_BACKEND backend, const cv::Mat& original_img) {
   bool success = pcs.infer_on_image(img, result, vis);
 
   if (benchmark_run) {
@@ -331,17 +348,21 @@ void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
     cv::imwrite(outfile, result);
   }
 
+  // Use original image dimensions for bbox extraction to get correct coordinates
+  cv::Size bbox_size = original_img.empty() ? img.size() : original_img.size();
+  
   // Extract bounding boxes with specified backend
   SAM3_BBOX_OPTIONS bbox_opts;
   bbox_opts.backend = backend;
-  bbox_opts.score_threshold = 0.5f;
+  bbox_opts.score_threshold = 0.25f;  // Lower threshold to detect more instances
   bbox_opts.min_box_area = 100;
+  bbox_opts.max_box_coverage = 0.8f;  // Filter out masks covering >80% of image
 
-  auto detections = pcs.extract_bounding_boxes(img.size(), bbox_opts);
+  auto detections = pcs.extract_bounding_boxes(bbox_size, bbox_opts);
 
   if (preview_mode && !detections.empty()) {
-    // Draw bounding boxes on original image and save preview
-    cv::Mat preview = img.clone();
+    // Draw bounding boxes on ORIGINAL image (not resized)
+    cv::Mat preview = original_img.empty() ? img.clone() : original_img.clone();
     draw_bounding_boxes(preview, detections);
     
     std::filesystem::path preview_path = outfile;
@@ -350,7 +371,7 @@ void infer_one_image(SAM3_PCS &pcs, const cv::Mat &img, cv::Mat &result,
     std::cout << "Preview saved: " << preview_path << " (" << detections.size() << " detections)" << std::endl;
   } else if (save_yolo && !detections.empty()) {
     // Save YOLO labels
-    pcs.save_yolo_labels(outfile, img.size(), bbox_opts);
+    pcs.save_yolo_labels(outfile, bbox_size, bbox_opts);
   }
 }
 
@@ -484,12 +505,17 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
+      // Keep track of original image for preview/YOLO output
+      cv::Mat original_img;
+      
       if (num_images_read == 0) {
         img = decoded.clone();
         result = decoded.clone();
         pinned_size = img.size();
         pcs.pin_opencv_matrices(img, result);
+        original_img = decoded.clone();  // Save original for first image
       } else {
+        original_img = decoded.clone();  // Always keep original
         if (decoded.size() != pinned_size) {
           cv::resize(decoded, img, pinned_size, 0.0, 0.0, cv::INTER_LINEAR);
         } else {
@@ -497,7 +523,7 @@ int main(int argc, char *argv[]) {
         }
       }
       start = std::chrono::system_clock::now();
-      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark, save_yolo, preview_mode, backend);
+      infer_one_image(pcs, img, result, visualize, outfile.string(), benchmark, save_yolo, preview_mode, backend, original_img);
       num_images_read++;
       end = std::chrono::system_clock::now();
       diff = end - start;

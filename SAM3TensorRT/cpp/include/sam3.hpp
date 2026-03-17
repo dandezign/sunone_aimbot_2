@@ -28,6 +28,7 @@ typedef struct {
     SAM3_BBOX_BACKEND backend = BBOX_BACKEND_CUDA_KERNEL;
     float score_threshold = 0.5f;      // Filter results by instance confidence
     int min_box_area = 100;            // Filter tiny boxes (pixels^2)
+    float max_box_coverage = 0.8f;     // Filter boxes covering >80% of image
     bool include_contours = false;     // Export polygon points
 } SAM3_BBOX_OPTIONS;
 

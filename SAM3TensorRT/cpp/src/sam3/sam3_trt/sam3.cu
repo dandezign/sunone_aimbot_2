@@ -458,6 +458,13 @@ std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_cuda_kernel(
         
         if (img_w * img_h < options.min_box_area) continue;
         
+        // Filter out boxes that cover too much of the image (likely background)
+        float coverage = static_cast<float>(img_w * img_h) / 
+                         (original_size.width * original_size.height);
+        if (coverage > options.max_box_coverage) {
+            continue;  // Silently filter large masks (likely background)
+        }
+        
         SAM3_PCS_RESULT result;
         result.score = score;
         result.class_id = _current_class_id;
@@ -484,17 +491,193 @@ std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bounding_boxes(
     const cv::Size& original_size,
     const SAM3_BBOX_OPTIONS& options)
 {
-    switch (options.backend) {
-        case BBOX_BACKEND_CUDA_KERNEL:
-            return extract_bboxes_cuda_kernel(original_size, options);
-        case BBOX_BACKEND_OPENCV_CUDA:
-            return extract_bboxes_opencv_cuda(original_size, options);
-        case BBOX_BACKEND_OPENCV_CPU:
-            return extract_bboxes_opencv_cpu(original_size, options);
-        default:
-            std::cerr << "Warning: Unknown backend, using CUDA kernel" << std::endl;
-            return extract_bboxes_cuda_kernel(original_size, options);
+    // Check if we have the new model outputs (pred_boxes and pred_logits)
+    // output_gpu[0] = instance_masks [1, 200, 288, 288]
+    // output_gpu[1] = pred_boxes [1, 200, 4] - normalized (cx, cy, w, h)
+    // output_gpu[2] = pred_logits [1, 200] - instance confidence scores
+    // output_gpu[3] = semantic_seg [1, 1, 288, 288]
+    
+    if (output_gpu.size() >= 3 && output_gpu[1] && output_gpu[2]) {
+        // New model with pred_boxes and pred_logits - use model predictions
+        return extract_bboxes_from_model_output(original_size, options);
+    } else {
+        // Old model without boxes - fall back to mask-based extraction
+        switch (options.backend) {
+            case BBOX_BACKEND_CUDA_KERNEL:
+                return extract_bboxes_cuda_kernel(original_size, options);
+            case BBOX_BACKEND_OPENCV_CUDA:
+                return extract_bboxes_opencv_cuda(original_size, options);
+            case BBOX_BACKEND_OPENCV_CPU:
+                return extract_bboxes_opencv_cpu(original_size, options);
+            default:
+                return extract_bboxes_cuda_kernel(original_size, options);
+        }
     }
+}
+
+std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_from_model_output(
+    const cv::Size& original_size,
+    const SAM3_BBOX_OPTIONS& options)
+{
+    std::vector<SAM3_PCS_RESULT> results;
+    
+    if (output_gpu.size() < 3 || !output_gpu[1] || !output_gpu[2]) {
+        std::cerr << "Warning: Model outputs not available. Call infer_on_image() first."
+                  << std::endl;
+        return results;
+    }
+    
+    const int num_instances = SAM3_MAX_INSTANCES;
+    const int img_width = original_size.width;
+    const int img_height = original_size.height;
+    
+    // Copy pred_boxes and pred_logits to CPU
+    // pred_boxes: [1, 200, 4] - normalized (x1, y1, x2, y2) in [0, 1]
+    // pred_logits: [1, 200] - raw logits, need sigmoid for confidence
+    std::vector<float> pred_boxes(num_instances * 4);
+    std::vector<float> pred_logits(num_instances);
+    
+    cudaMemcpyAsync(pred_boxes.data(), output_gpu[1], 
+                    num_instances * 4 * sizeof(float),
+                    cudaMemcpyDeviceToHost, sam3_stream);
+    cudaMemcpyAsync(pred_logits.data(), output_gpu[2], 
+                    num_instances * sizeof(float),
+                    cudaMemcpyDeviceToHost, sam3_stream);
+    cudaStreamSynchronize(sam3_stream);
+    
+    // Temporary storage for NMS
+    struct BBoxWithScore {
+        float x1, y1, x2, y2;
+        float score;
+        int index;
+    };
+    std::vector<BBoxWithScore> all_boxes;
+    
+    // Process each instance
+    for (int i = 0; i < num_instances; ++i) {
+        // Apply sigmoid to pred_logits to get confidence score
+        float logit = pred_logits[i];
+        float score = 1.0f / (1.0f + expf(-logit));
+        
+        if (score < options.score_threshold) continue;
+        
+        // Get normalized box (x1, y1, x2, y2) in [0, 1]
+        // Model outputs are already in xyxy format, NOT cxcywh!
+        float x1_norm = pred_boxes[i * 4 + 0];
+        float y1_norm = pred_boxes[i * 4 + 1];
+        float x2_norm = pred_boxes[i * 4 + 2];
+        float y2_norm = pred_boxes[i * 4 + 3];
+        
+        // Clamp to valid range
+        x1_norm = std::max(0.0f, std::min(1.0f, x1_norm));
+        y1_norm = std::max(0.0f, std::min(1.0f, y1_norm));
+        x2_norm = std::max(0.0f, std::min(1.0f, x2_norm));
+        y2_norm = std::max(0.0f, std::min(1.0f, y2_norm));
+        
+        // Skip invalid boxes (x2 must be > x1, y2 must be > y1)
+        if (x2_norm <= x1_norm || y2_norm <= y1_norm) continue;
+        
+        // Convert to image coordinates
+        int x1 = static_cast<int>(x1_norm * img_width);
+        int y1 = static_cast<int>(y1_norm * img_height);
+        int x2 = static_cast<int>(x2_norm * img_width);
+        int y2 = static_cast<int>(y2_norm * img_height);
+        
+        // Clamp to image bounds
+        x1 = std::max(0, std::min(img_width - 1, x1));
+        y1 = std::max(0, std::min(img_height - 1, y1));
+        x2 = std::max(0, std::min(img_width - 1, x2));
+        y2 = std::max(0, std::min(img_height - 1, y2));
+        
+        int box_w = x2 - x1;
+        int box_h = y2 - y1;
+        
+        // Skip tiny boxes
+        if (box_w * box_h < options.min_box_area) continue;
+        
+        // Filter out boxes that cover too much of the image
+        float coverage = static_cast<float>(box_w * box_h) / (img_width * img_height);
+        if (coverage > options.max_box_coverage) continue;
+        
+        // Add to list for NMS
+        BBoxWithScore bbox;
+        bbox.x1 = static_cast<float>(x1);
+        bbox.y1 = static_cast<float>(y1);
+        bbox.x2 = static_cast<float>(x2);
+        bbox.y2 = static_cast<float>(y2);
+        bbox.score = score;
+        bbox.index = i;
+        all_boxes.push_back(bbox);
+    }
+    
+    // Sort by score (descending)
+    std::sort(all_boxes.begin(), all_boxes.end(), 
+              [](const BBoxWithScore& a, const BBoxWithScore& b) {
+                  return a.score > b.score;
+              });
+    
+    // Apply NMS (Non-Maximum Suppression)
+    const float nms_threshold = 0.5f;  // IoU threshold for NMS
+    std::vector<bool> suppressed(all_boxes.size(), false);
+    
+    for (size_t i = 0; i < all_boxes.size(); ++i) {
+        if (suppressed[i]) continue;
+        
+        const BBoxWithScore& box_i = all_boxes[i];
+        float area_i = (box_i.x2 - box_i.x1) * (box_i.y2 - box_i.y1);
+        
+        for (size_t j = i + 1; j < all_boxes.size(); ++j) {
+            if (suppressed[j]) continue;
+            
+            const BBoxWithScore& box_j = all_boxes[j];
+            
+            // Calculate IoU
+            float inter_x1 = std::max(box_i.x1, box_j.x1);
+            float inter_y1 = std::max(box_i.y1, box_j.y1);
+            float inter_x2 = std::min(box_i.x2, box_j.x2);
+            float inter_y2 = std::min(box_i.y2, box_j.y2);
+            
+            float inter_w = std::max(0.0f, inter_x2 - inter_x1);
+            float inter_h = std::max(0.0f, inter_y2 - inter_y1);
+            float inter_area = inter_w * inter_h;
+            
+            float area_j = (box_j.x2 - box_j.x1) * (box_j.y2 - box_j.y1);
+            float union_area = area_i + area_j - inter_area;
+            
+            float iou = (union_area > 0.0f) ? (inter_area / union_area) : 0.0f;
+            
+            if (iou > nms_threshold) {
+                suppressed[j] = true;
+            }
+        }
+    }
+    
+    // Build final results from non-suppressed boxes
+    for (size_t i = 0; i < all_boxes.size(); ++i) {
+        if (suppressed[i]) continue;
+        
+        const BBoxWithScore& bbox = all_boxes[i];
+        
+        SAM3_PCS_RESULT result;
+        result.score = bbox.score;
+        result.class_id = _current_class_id;
+        
+        // Image coordinates
+        result.box_x = static_cast<int>(bbox.x1);
+        result.box_y = static_cast<int>(bbox.y1);
+        result.box_w = static_cast<int>(bbox.x2 - bbox.x1);
+        result.box_h = static_cast<int>(bbox.y2 - bbox.y1);
+        
+        // Mask coordinates (convert back from image to mask space)
+        result.mask_x = static_cast<int>(bbox.x1 / img_width * SAM3_OUTMASK_WIDTH);
+        result.mask_y = static_cast<int>(bbox.y1 / img_height * SAM3_OUTMASK_HEIGHT);
+        result.mask_w = static_cast<int>((bbox.x2 - bbox.x1) / img_width * SAM3_OUTMASK_WIDTH);
+        result.mask_h = static_cast<int>((bbox.y2 - bbox.y1) / img_height * SAM3_OUTMASK_HEIGHT);
+        
+        results.push_back(result);
+    }
+    
+    return results;
 }
 
 std::vector<SAM3_PCS_RESULT> SAM3_PCS::extract_bboxes_opencv_cuda(

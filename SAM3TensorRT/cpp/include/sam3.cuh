@@ -110,6 +110,10 @@ private:
         const cv::Size& original_size,
         const SAM3_BBOX_OPTIONS& options
     );
+    std::vector<SAM3_PCS_RESULT> extract_bboxes_from_model_output(
+        const cv::Size& original_size,
+        const SAM3_BBOX_OPTIONS& options
+    );
 
     void visualize_on_dGPU(const cv::Mat& input, cv::Mat& result, SAM3_VISUALIZATION vis_type);
     const float _overlay_alpha, _probability_threshold;

@@ -29,6 +29,7 @@
 #include "virtual_camera.h"
 #include "mem/gpu_resource_manager.h"
 #include "mem/cpu_affinity_manager.h"
+#include "training/training_sam3_runtime.h"
 
 #ifdef USE_CUDA
 #include "depth/depth_anything_trt.h"
