@@ -131,19 +131,7 @@ class Sam3Builder:
             str(trtexec),
             f"--onnx={onnx_path.name}",
             f"--saveEngine={self.config.engine_filename}",
-            # Input shapes
-            "--minShapes=pixel_values:1x3x1008x1008",
-            "--optShapes=pixel_values:1x3x1008x1008",
-            "--maxShapes=pixel_values:1x3x1008x1008",
-            "--minShapes=input_ids:1x32",
-            "--optShapes=input_ids:1x32",
-            "--maxShapes=input_ids:1x32",
-            "--minShapes=attention_mask:1x32",
-            "--optShapes=attention_mask:1x32",
-            "--maxShapes=attention_mask:1x32",
-            # Memory and performance
             "--memPoolSize=workspace:4096",
-            "--timingCacheFile=sam3_cache.cache",
         ]
 
         # Add FP16 flag if enabled

@@ -65,7 +65,8 @@ def main():
         downloader = Sam3Downloader(config)
         model_dir = downloader.download(force=args.force)
     else:
-        model_dir = config.weights_dir
+        # Use sam3_weights directory for transformers.from_pretrained
+        model_dir = config.models_dir / "sam3_weights"
         print(f"Skipping download. Using weights at {model_dir}")
 
     # Step 2: Export to ONNX
@@ -171,13 +172,12 @@ def validate_skip_flags(args: argparse.Namespace, config: Sam3Config) -> list:
     errors = []
 
     if args.skip_download:
-        downloader = Sam3Downloader(config)
-        if not downloader.exists():
-            errors.append("Weights not found. Run without --skip-download first.")
+        if not config.sam3_pt_path.exists():
+            errors.append("sam3.pt not found. Run without --skip-download first.")
 
     if args.skip_export:
-        if not config.onnx_path.exists() or not config.onnx_data_path.exists():
-            errors.append("ONNX files not found. Run without --skip-export first.")
+        if not config.onnx_path.exists():
+            errors.append("ONNX file not found. Run without --skip-export first.")
 
     if args.skip_build:
         if not config.engine_path.exists():

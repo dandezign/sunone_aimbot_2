@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import login, snapshot_download
+from huggingface_hub import login, hf_hub_download
 
 from .config import Sam3Config
 from .utils import format_size
@@ -14,7 +14,14 @@ logger = logging.getLogger("sam3")
 
 
 class Sam3Downloader:
-    """Downloads SAM3 model from HuggingFace."""
+    """Downloads SAM3 model from HuggingFace.
+
+    Downloads sam3.pt directly (Ultralytics format) AND the full HuggingFace
+    model structure for ONNX export with transformers.
+    """
+
+    # Target file in HuggingFace repo
+    SAM3_PT_FILENAME = "sam3.pt"
 
     def __init__(self, config: Sam3Config):
         """Initialize downloader with configuration.
@@ -23,10 +30,14 @@ class Sam3Downloader:
             config: Sam3Config instance
         """
         self.config = config
-        self.model_dir = config.weights_dir
+        self.model_dir = config.models_dir / "sam3_weights"
+        self.sam3_pt_path = self.model_dir / self.SAM3_PT_FILENAME
 
     def download(self, force: bool = False) -> Path:
         """Download SAM3 model from HuggingFace.
+
+        Downloads sam3.pt directly (Ultralytics checkpoint format).
+        This is the recommended format for ONNX export.
 
         Args:
             force: Redownload even if exists
@@ -34,72 +45,70 @@ class Sam3Downloader:
         Returns:
             Path to downloaded model directory
         """
-        # Check if already downloaded
-        if self.model_dir.exists() and not force:
-            # Check for at least one weight file
-            weight_files = list(self.model_dir.glob("*.safetensors")) + list(
-                self.model_dir.glob("*.bin")
-            )
-            if weight_files:
-                logger.info(f"Model already exists at {self.model_dir}")
-                return self.model_dir
+        # Check if sam3.pt already exists
+        if self.sam3_pt_path.exists() and not force:
+            file_size = self.sam3_pt_path.stat().st_size
+            logger.info(f"sam3.pt already exists at {self.sam3_pt_path}")
+            logger.info(f"Size: {format_size(file_size)}")
+            return self.model_dir
 
         # Login if token provided
         if self.config.hf_token:
             logger.info("Logging in to HuggingFace...")
             login(token=self.config.hf_token)
 
-        logger.info(f"Downloading {self.config.hf_repo}...")
+        logger.info(f"Downloading {self.config.hf_repo}/{self.SAM3_PT_FILENAME}...")
 
         # Create output directory
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Download with resume support
-            snapshot_download(
+            # Download sam3.pt directly
+            downloaded_path = hf_hub_download(
                 repo_id=self.config.hf_repo,
-                local_dir=self.model_dir,
+                filename=self.SAM3_PT_FILENAME,
+                local_dir=str(self.model_dir),
                 local_dir_use_symlinks=False,
-                resume_download=True,
+                force_download=force,
             )
 
-            # Log size
-            total_size = sum(
-                f.stat().st_size for f in self.model_dir.rglob("*") if f.is_file()
-            )
-            logger.info(f"Downloaded to {self.model_dir} ({format_size(total_size)})")
-
-            return self.model_dir
+            # Verify download
+            if self.sam3_pt_path.exists():
+                file_size = self.sam3_pt_path.stat().st_size
+                logger.info(f"Downloaded to {self.sam3_pt_path}")
+                logger.info(f"Size: {format_size(file_size)}")
+                return self.model_dir
+            else:
+                raise RuntimeError(
+                    f"Download succeeded but file not found at {self.sam3_pt_path}"
+                )
 
         except Exception as e:
             logger.error(f"Download failed: {e}")
             raise
 
+    def get_sam3_pt_path(self) -> Optional[Path]:
+        """Get path to sam3.pt file.
+
+        Returns:
+            Path to sam3.pt, or None if not found
+        """
+        if self.sam3_pt_path.exists():
+            return self.sam3_pt_path
+        return None
+
     def get_pytorch_path(self) -> Optional[Path]:
         """Get path to PyTorch weights file.
 
         Returns:
-            Path to .safetensors or .bin file, or None if not found
+            Path to sam3.pt, or None if not found
         """
-        safetensors = list(self.model_dir.glob("model.safetensors"))
-        if safetensors:
-            return safetensors[0]
-
-        bin_files = list(self.model_dir.glob("pytorch_model.bin"))
-        if bin_files:
-            return bin_files[0]
-
-        return None
+        return self.get_sam3_pt_path()
 
     def exists(self) -> bool:
-        """Check if weights already exist.
+        """Check if sam3.pt already exists.
 
         Returns:
-            True if weights directory has weight files
+            True if sam3.pt exists
         """
-        if not self.model_dir.exists():
-            return False
-        return (
-            len(list(self.model_dir.glob("*.safetensors"))) > 0
-            or len(list(self.model_dir.glob("*.bin"))) > 0
-        )
+        return self.sam3_pt_path.exists()

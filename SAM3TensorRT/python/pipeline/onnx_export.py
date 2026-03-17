@@ -1,7 +1,11 @@
 # SAM3TensorRT/python/pipeline/onnx_export.py
-"""ONNX export and weight packing for SAM3."""
+"""ONNX export and weight packing for SAM3.
+
+Exports from sam3.pt (transformers format) with text prompt support.
+"""
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Tuple
 
@@ -19,10 +23,10 @@ logger = logging.getLogger("sam3")
 class Sam3ONNXWrapper(torch.nn.Module):
     """Wrapper for SAM3 model with explicit output handling.
 
-    This ensures all outputs are properly traced during ONNX export.
+    Ensures all outputs are properly traced during ONNX export.
     """
 
-    def __init__(self, sam3):
+    def __init__(self, sam3: torch.nn.Module):
         super().__init__()
         self.sam3 = sam3
 
@@ -68,7 +72,11 @@ class Sam3ONNXWrapper(torch.nn.Module):
 
 
 class Sam3Exporter:
-    """Exports SAM3 model to ONNX format with weight packing."""
+    """Exports SAM3 model to ONNX format with weight packing.
+
+    Uses transformers library for correct SAM3 PCS (Promptable Concept Segmentation)
+    architecture with text prompt inputs.
+    """
 
     def __init__(self, config: Sam3Config):
         """Initialize exporter with configuration.
@@ -84,8 +92,10 @@ class Sam3Exporter:
     def export(self, model_dir: Path, force: bool = False) -> Tuple[Path, Path]:
         """Export SAM3 to ONNX format with weight packing.
 
+        Exports from sam3.pt using transformers Sam3Model.
+
         Args:
-            model_dir: Path to downloaded model weights
+            model_dir: Path to directory containing sam3.pt
             force: Re-export even if ONNX exists
 
         Returns:
@@ -96,19 +106,37 @@ class Sam3Exporter:
             logger.info(f"ONNX already exists at {self.onnx_path}")
             return self.onnx_path, self.onnx_data_path
 
+        # Find sam3.pt
+        sam3_pt_path = model_dir / "sam3.pt"
+        if not sam3_pt_path.exists():
+            raise FileNotFoundError(
+                f"sam3.pt not found at {sam3_pt_path}\n"
+                "Run setup_sam3.py without --skip-download first."
+            )
+
         logger.info("Exporting to ONNX...")
+        logger.info(f"Source: {sam3_pt_path}")
 
-        # Load model and processor
-        logger.info("Loading model...")
-        from transformers import Sam3Model, Sam3Processor
+        # Create output directory
+        ensure_dir(self.output_dir)
 
+        # Load model and processor using transformers
+        try:
+            from transformers import Sam3Model, Sam3Processor
+        except ImportError:
+            raise ImportError(
+                "transformers package not installed.\n"
+                "Run: pip install transformers==5.0.0rc1"
+            )
+
+        logger.info("Loading sam3.pt with transformers...")
         model = Sam3Model.from_pretrained(str(model_dir)).to("cpu").eval()
         processor = Sam3Processor.from_pretrained(str(model_dir))
 
-        # Create wrapper
+        # Create wrapper for clean ONNX graph
         wrapper = Sam3ONNXWrapper(model).to("cpu").eval()
 
-        # Prepare dummy inputs
+        # Prepare dummy inputs (required for tracing)
         logger.info("Preparing sample inputs...")
         dummy_image = Image.new("RGB", (1008, 1008), color=(128, 128, 128))
         inputs = processor(images=dummy_image, text="object", return_tensors="pt")
@@ -123,9 +151,6 @@ class Sam3Exporter:
             test_outputs = wrapper(pixel_values, input_ids, attention_mask)
             for i, tensor in enumerate(test_outputs):
                 logger.info(f"  Output {i}: shape={tensor.shape}, dtype={tensor.dtype}")
-
-        # Create output directory
-        ensure_dir(self.output_dir)
 
         # Export to temporary ONNX file
         temp_onnx = self.output_dir / "temp_sam3.onnx"
@@ -142,8 +167,8 @@ class Sam3Exporter:
             verbose=False,
         )
 
-        # Pack weights into external data
-        logger.info("Packing weights into external data...")
+        # Pack weights into external data file (for large models)
+        logger.info("Packing weights into external data file...")
         self._pack_weights(temp_onnx)
 
         # Cleanup temp file
@@ -151,30 +176,36 @@ class Sam3Exporter:
             temp_onnx.unlink()
 
         # Log sizes
-        onnx_size = self.onnx_path.stat().st_size if self.onnx_path.exists() else 0
+        onnx_size = self.onnx_path.stat().st_size
         data_size = (
             self.onnx_data_path.stat().st_size if self.onnx_data_path.exists() else 0
         )
-        logger.info(f"Exported to {self.onnx_path} ({format_size(onnx_size)})")
-        logger.info(f"Data file: {self.onnx_data_path} ({format_size(data_size)})")
+        logger.info(f"ONNX file: {format_size(onnx_size)}")
+        if data_size > 0:
+            logger.info(f"Data file: {format_size(data_size)}")
 
         return self.onnx_path, self.onnx_data_path
 
     def _pack_weights(self, temp_onnx: Path) -> None:
         """Pack ONNX weights into external .data file.
 
+        Uses size_threshold=0 to pack ALL tensors (matches manual PowerShell script).
+
         Args:
             temp_onnx: Path to temporary ONNX file
         """
         model = onnx.load(str(temp_onnx))
 
+        # Convert to external data format
+        # size_threshold=0 packs ALL tensors (matches Repack-OnnxExternalData)
         convert_model_to_external_data(
             model,
             all_tensors_to_one_file=True,
             location=self.config.onnx_filename + ".data",
-            size_threshold=500_000_000,  # 500MB threshold
+            size_threshold=0,  # Pack ALL tensors (matches manual scripts)
         )
 
+        # Save the model
         onnx.save(model, str(self.onnx_path))
 
     def exists(self) -> bool:

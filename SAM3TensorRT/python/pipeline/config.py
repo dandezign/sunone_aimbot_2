@@ -88,9 +88,14 @@ class Sam3Config:
         return self.models_dir / self.engine_filename
 
     @property
+    def sam3_pt_path(self) -> Path:
+        """Full path to sam3.pt file."""
+        return self.models_dir / "sam3.pt"
+
+    @property
     def weights_dir(self) -> Path:
-        """Full path to downloaded weights directory."""
-        return self.models_dir / "sam3_weights"
+        """Full path to models directory (contains sam3.pt)."""
+        return self.models_dir
 
     def resolve_output_path(self, path: Optional[str] = None) -> Path:
         """Resolve output path for engine file.
