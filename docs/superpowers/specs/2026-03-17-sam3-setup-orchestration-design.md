@@ -70,7 +70,7 @@ Centralized configuration management with `.env` loading and path resolution.
 class Sam3Config:
     # Paths (loaded from .env or defaults)
     repo_root: Path                    # Auto-detected from script location
-    models_dir: Path                   # sunone_aimbot_2/models/
+    models_dir: Path                   # models/ (relative to repo_root)
     onnx_output_dir: Path              # SAM3TensorRT/python/onnx_weights/
     
     # HuggingFace settings
@@ -176,8 +176,9 @@ python setup_sam3.py --skip-build       # Skip engine build
 └─────────────┘     └─────────────────────┘     └─────────────┘
       │                       │                       │
       ▼                       ▼                       ▼
- models/              onnx_weights/              models/
- sam3_weights/        sam3_dynamic.onnx          sam3_fp16.engine
+ models/              SAM3TensorRT/python/      models/
+ sam3_weights/        onnx_weights/             sam3_fp16.engine
+                      sam3_dynamic.onnx
                       sam3_dynamic.onnx.data
 ```
 
@@ -205,7 +206,7 @@ python setup_sam3.py --skip-build       # Skip engine build
 
 ```cmake
 # Source directories (from repo root)
-set(SAM3_MODELS_SOURCE "${SAM3_WORKSPACE_ROOT}/sunone_aimbot_2/models")
+set(SAM3_MODELS_SOURCE "${SAM3_WORKSPACE_ROOT}/models")
 set(SAM3_TRAINING_SOURCE "${SAM3_WORKSPACE_ROOT}/sunone_aimbot_2/scripts/training")
 
 # Destination directories (generator expressions for build output)
@@ -236,7 +237,7 @@ add_custom_command(TARGET sam3 POST_BUILD
 ```
 
 **Important:** `copy_directory_if_different` will fail if the source directory doesn't exist. Therefore:
-1. Run the Python setup script (`setup_sam3.py`) first to create `sunone_aimbot_2/models/` with `sam3_fp16.engine`
+1. Run the Python setup script (`setup_sam3.py`) first to create `models/` with `sam3_fp16.engine`
 2. Then run CMake build to copy files to build output
 3. If `models/` source doesn't exist, CMake will emit a warning but continue (the `make_directory` commands ensure destination dirs are created regardless)
 
@@ -244,7 +245,7 @@ add_custom_command(TARGET sam3 POST_BUILD
 ```
 SAM3TensorRT/cpp/build/cuda/Release/
 ├── sam3.exe                    # Renamed from sam3_pcs_app.exe
-├── models/                     # Copied from sunone_aimbot_2/models/
+├── models/                     # Copied from models/ (repo root)
 │   ├── sam3_fp16.engine
 │   └── presets/
 ├── training/                   # Copied from sunone_aimbot_2/scripts/training/
