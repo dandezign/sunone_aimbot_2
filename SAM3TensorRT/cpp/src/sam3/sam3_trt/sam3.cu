@@ -120,8 +120,14 @@ void SAM3_PCS::visualize_on_dGPU(const cv::Mat &input, cv::Mat &result,
     sgsize.y = (input.rows + THREAD_COARSENING_FACTOR * sbsize.y - 1) /
                (THREAD_COARSENING_FACTOR * sbsize.y);
 
+    // In the new 4-output model: output_gpu[3] = semantic_seg
+    // In the old 2-output model: output_gpu[1] = semantic_seg
+    void* semantic_seg_ptr = (output_gpu.size() >= 4 && output_gpu[3]) 
+        ? output_gpu[3] 
+        : output_gpu[1];
+
     draw_semantic_seg_mask<<<sgsize, sbsize, 0, sam3_stream>>>(
-        input_ptr, static_cast<float *>(output_gpu[1]), gpu_result, input.cols,
+        input_ptr, static_cast<float *>(semantic_seg_ptr), gpu_result, input.cols,
         input.rows, input.channels(), SAM3_OUTMASK_WIDTH, SAM3_OUTMASK_HEIGHT,
         _overlay_alpha, _probability_threshold, make_float3(0, 185, 118));
   } else if (vis_type == SAM3_VISUALIZATION::VIS_INSTANCE_SEGMENTATION) {
