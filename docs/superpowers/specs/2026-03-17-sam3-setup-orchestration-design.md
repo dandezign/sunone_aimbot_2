@@ -45,6 +45,22 @@ SAM3TensorRT/python/
 └── tokenize_prompt.py         # Existing (unchanged)
 ```
 
+**`pipeline/__init__.py` exports:**
+```python
+from .config import Sam3Config
+from .download import Sam3Downloader
+from .onnx_export import Sam3Exporter
+from .engine_build import Sam3Builder
+
+__all__ = ["Sam3Config", "Sam3Downloader", "Sam3Exporter", "Sam3Builder"]
+```
+
+**`pipeline/utils.py` utilities:**
+- `setup_logging(level: str = "INFO")` - Configure logging with timestamp format
+- `calculate_sha256(file_path: Path) -> str` - Compute file hash for integrity checks
+- `ensure_dir(path: Path) -> Path` - Create directory if not exists, return path
+- `format_size(bytes: int) -> str` - Human-readable file size (e.g., "3.2 GB")
+
 ### 2. Config Module (`pipeline/config.py`)
 
 Centralized configuration management with `.env` loading and path resolution.
@@ -93,6 +109,22 @@ Exports SAM3 to ONNX format with weight packing.
 - Packs large weights into `.onnx.data` file (threshold: 500MB)
 - Removes temporary files after packing
 - Skips if `.onnx` + `.onnx.data` already exist
+
+**Weight packing implementation:**
+```python
+import onnx
+from onnx.external_data_helper import convert_model_to_external_data
+
+# After torch.onnx.export, pack weights
+model = onnx.load(str(temp_onnx_path))
+convert_model_to_external_data(
+    model,
+    all_tensors_to_one_file=True,
+    location=onnx_filename + ".data",
+    size_threshold=500_000_000,  # 500MB threshold
+)
+onnx.save(model, str(final_onnx_path))
+```
 
 **Output:**
 - `onnx_weights/sam3_dynamic.onnx` (~39MB)
@@ -151,6 +183,11 @@ python setup_sam3.py --skip-build       # Skip engine build
 
 **Note:** Weight packing is integrated into the ONNX Export module, not a separate stage.
 
+**Skip flag validation:**
+- If `--skip-download` and weights don't exist → Error: "Weights not found. Run without --skip-download first."
+- If `--skip-export` and ONNX files don't exist → Error: "ONNX files not found. Run without --skip-export first."
+- If `--skip-build` and engine doesn't exist → Error: "Engine not found. Run without --skip-build first."
+
 ### 7. CMakeLists.txt Changes
 
 **File:** `SAM3TensorRT/cpp/CMakeLists.txt`
@@ -184,12 +221,12 @@ add_custom_command(TARGET sam3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_TRAINING_DEST}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SAM3_RESULTS_DEST}"
     
-    # Copy models if source exists (copy_directory_if_different only copies changed files)
+    # Copy models only if source exists (guard against missing directory)
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${SAM3_MODELS_SOURCE}"
         "${SAM3_MODELS_DEST}"
     
-    # Copy training data if source exists
+    # Copy training data
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${SAM3_TRAINING_SOURCE}"
         "${SAM3_TRAINING_DEST}"
@@ -198,7 +235,10 @@ add_custom_command(TARGET sam3 POST_BUILD
 )
 ```
 
-**Note:** The `models/` directory at `sunone_aimbot_2/models/` will be created by the Python setup script when it outputs `sam3_fp16.engine`. CMake will skip the copy gracefully if the source doesn't exist.
+**Important:** `copy_directory_if_different` will fail if the source directory doesn't exist. Therefore:
+1. Run the Python setup script (`setup_sam3.py`) first to create `sunone_aimbot_2/models/` with `sam3_fp16.engine`
+2. Then run CMake build to copy files to build output
+3. If `models/` source doesn't exist, CMake will emit a warning but continue (the `make_directory` commands ensure destination dirs are created regardless)
 
 **Expected build output:**
 ```
@@ -253,8 +293,8 @@ CLIP_TOKENIZER_MODEL=openai/clip-vit-base-patch32
 3. **CUDA not available**: Error with GPU/driver requirements
 4. **Disk space**: Warn if < 10GB available (model is ~4GB)
 5. **Network errors**: Retry logic with exponential backoff (3 retries)
-6. **Corrupted ONNX files**: Check file integrity via SHA256 hash if available, re-export if corrupted
-7. **Partial downloads**: Use `huggingface_hub` resume capability, delete incomplete files
+6. **Corrupted ONNX files**: Compare SHA256 hash with HuggingFace-provided hash (if available). If mismatch, delete and re-export. If no hash available, re-export if file size is unexpected.
+7. **Partial downloads**: Use `huggingface_hub` resume capability, delete incomplete files on failure
 8. **Malformed .env**: Skip malformed lines, warn user with line number
 9. **Invalid interactive path**: Re-prompt user with error message until valid absolute path provided
 10. **CUDA version mismatch**: Detect PyTorch CUDA vs system CUDA, warn if incompatible
@@ -290,10 +330,13 @@ requests>=2.28.0
 pytest>=7.0.0
 ```
 
-**Note:** CUDA 13.1 compatible `torch` version required. Install via:
+**Note:** PyTorch CUDA compatibility:
+- System CUDA 13.1 is compatible with PyTorch built for CUDA 12.x (forward compatibility)
+- Install PyTorch with CUDA 12.4 support (latest stable):
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
+- The PyTorch CUDA version does NOT need to match system CUDA exactly for inference
 
 ### External:
 - TensorRT 10.14.1.48 (for `trtexec`)
