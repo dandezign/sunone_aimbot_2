@@ -2,4 +2,6 @@
 *build
 *build-win
 *build-win-cuda
-*UI
+# UI directory - ignore node_modules but track source
+UI/node_modules/
+UI/build/
