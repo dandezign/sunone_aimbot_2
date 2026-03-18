@@ -3001,6 +3001,273 @@ git commit -m "feat(labeler): add ClassLoader for classes.txt"
 
 ---
 
+## Chunk 9: Final Integration and Testing
+
+### Task 9.1: App Integration - Wire Everything Together
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/app/app.cpp`
+
+- [ ] **Step 1: Update App class to use UIRenderer**
+
+Replace render_ui() with full integration:
+
+```cpp
+void App::render_ui() {
+    // Delegate to UIRenderer
+    ui_renderer_->render();
+}
+```
+
+Add to init():
+
+```cpp
+bool App::init() {
+    // ... existing init code ...
+    
+    // Load classes
+    std::string classes_path = ClassLoader::find_classes_file(config_.settings.output_dir);
+    if (!classes_path.empty()) {
+        class_loader_.load(classes_path);
+    }
+    
+    // Create UI renderer
+    ui_renderer_ = std::make_unique<UIRenderer>(*this);
+    
+    // Set up log callback
+    ui_renderer_->log_console().add_entry("INFO", "Application initialized");
+    
+    return true;
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/app.cpp
+git commit -m "feat(labeler): integrate UIRenderer into App"
+```
+
+---
+
+### Task 9.2: Implement Error Dialogs
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/error_dialog.h`
+
+- [ ] **Step 1: Create error_dialog.h**
+
+```cpp
+#pragma once
+
+#include <imgui.h>
+#include <string>
+#include <functional>
+
+namespace sam3_labeler {
+
+class ErrorDialog {
+public:
+    void show(const std::string& title, const std::string& message) {
+        show_ = true;
+        title_ = title;
+        message_ = message;
+    }
+    
+    void render() {
+        if (!show_) return;
+        
+        ImGui::OpenPopup(title_.c_str());
+        
+        if (ImGui::BeginPopupModal(title_.c_str(), &show_, 
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("%s", message_.c_str());
+            ImGui::Spacing();
+            
+            if (ImGui::Button("OK", ImVec2(80, 0))) {
+                show_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            
+            ImGui::EndPopup();
+        }
+    }
+    
+private:
+    bool show_ = false;
+    std::string title_;
+    std::string message_;
+};
+
+class ConfirmDialog {
+public:
+    using Callback = std::function<void(bool)>;
+    
+    void show(const std::string& title, const std::string& message, Callback callback) {
+        show_ = true;
+        title_ = title;
+        message_ = message;
+        callback_ = callback;
+    }
+    
+    void render() {
+        if (!show_) return;
+        
+        ImGui::OpenPopup(title_.c_str());
+        
+        if (ImGui::BeginPopupModal(title_.c_str(), &show_, 
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("%s", message_.c_str());
+            ImGui::Spacing();
+            
+            if (ImGui::Button("Yes", ImVec2(80, 0))) {
+                if (callback_) callback_(true);
+                show_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("No", ImVec2(80, 0))) {
+                if (callback_) callback_(false);
+                show_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            
+            ImGui::EndPopup();
+        }
+    }
+    
+private:
+    bool show_ = false;
+    std::string title_;
+    std::string message_;
+    Callback callback_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/error_dialog.h
+git commit -m "feat(labeler): add ErrorDialog and ConfirmDialog"
+```
+
+---
+
+### Task 9.3: End-to-End Integration Test
+
+- [ ] **Step 1: Build the complete application**
+
+```bash
+cmake --build build/sam3 --config Release --target sam3_labeler
+```
+
+Expected: Build succeeds with no errors
+
+- [ ] **Step 2: Run the labeler**
+
+```bash
+.\build\sam3\Release\sam3_labeler.exe
+```
+
+Expected: Window opens with dark theme
+
+- [ ] **Step 3: Test video loading**
+
+- Use Capture panel to browse for an MP4 file
+- Verify video loads and displays
+- Test play/pause/step controls
+- Test seek bar
+
+Expected: Video plays correctly, controls work
+
+- [ ] **Step 4: Test SAM3 inference**
+
+- Load a video and pause on a frame
+- Ensure prompts are configured in config.yaml
+- Run inference (trigger from UI)
+- Verify bounding boxes appear on frame
+
+Expected: Boxes appear with correct class colors
+
+- [ ] **Step 5: Test box editing**
+
+- Click on a box to select it
+- Drag to move the box
+- Drag corners to resize
+- Press Delete to remove a box
+- Use Ctrl+Z to undo
+- Click+drag on empty area to create new box
+
+Expected: All editing operations work correctly
+
+- [ ] **Step 6: Test YOLO export**
+
+- Click Save button
+- Choose output directory
+- Verify image and label files created
+- Check YOLO format is correct
+
+Expected: Files created with correct format
+
+- [ ] **Step 7: Commit if all tests pass**
+
+```bash
+git add -A
+git commit -m "feat(labeler): complete integration - all tests passing"
+```
+
+---
+
+### Task 9.4: Fix Any Remaining TODOs
+
+- [ ] **Step 1: Replace TODO in MultiPromptRunner**
+
+Replace `// TODO: Implement NMS if needed` with actual NMS or remove if not needed for this version.
+
+- [ ] **Step 2: Replace TODO in YOLOExporter**
+
+Replace `// TODO: get from config` with:
+```cpp
+std::string img_ext = config_.settings.image_format;
+```
+
+Replace `// TODO: Prompt user for overwrite confirmation` with:
+```cpp
+if (YOLOExporter::file_exists(img_path)) {
+    // Use ConfirmDialog from error_dialog.h
+    confirm_dialog_.show("Overwrite?", 
+        "File already exists. Overwrite?", 
+        [this, img_path, label_path, frame, boxes](bool confirmed) {
+            if (confirmed) {
+                do_export(img_path, label_path, frame, boxes);
+            }
+        });
+}
+```
+
+- [ ] **Step 3: Replace TODO in UIRenderer toolbar**
+
+Replace `// TODO: actual frame size` with:
+```cpp
+auto size = video_canvas_.frame_size();
+if (size.width > 0) {
+    ImGui::TextDisabled("(%d x %d)", size.width, size.height);
+} else {
+    ImGui::TextDisabled("(no video)");
+}
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "fix(labeler): replace all TODO markers with implementations"
+```
+
+---
+
 ## Summary
 
 This expanded plan covers the full implementation of the SAM3 Video Labeler:
@@ -3013,6 +3280,7 @@ This expanded plan covers the full implementation of the SAM3 Video Labeler:
 6. **Chunk 6**: SAM3LabelerBackend with SAM3_PCS integration
 7. **Chunk 7**: BoxEditor with full interaction (select, move, resize, create, undo/redo)
 8. **Chunk 8**: UIRenderer integration, ClassLoader
+9. **Chunk 9**: Final integration, error dialogs, end-to-end testing
 
 Each task has exact file paths, complete code, and commit commands. Follow the tasks in order, committing after each completed step.
 
