@@ -1,6 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "envFile": ".env",
   "mcp": {
     "figma": {
       "type": "local",
