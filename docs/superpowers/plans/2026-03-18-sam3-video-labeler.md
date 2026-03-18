@@ -943,7 +943,7 @@ Expected: Build succeeds with no errors
 
 Expected: Window opens with dark theme, shows "SAM3 Video Labeler" text
 
-- [ ] **Step 3: Commit if working**
+- [ ] **Step 4: Commit if working**
 
 ```bash
 git add -A
@@ -1876,14 +1876,1143 @@ git commit -m "feat(labeler): implement LogConsole with colored levels"
 
 ---
 
+## Chunk 5: VideoPlayer and VideoCanvas Implementation
+
+### Task 5.1: Implement VideoPlayer
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/video/video_player.h`
+
+- [ ] **Step 1: Add VideoPlayer implementation**
+
+Replace the stub with full implementation:
+
+```cpp
+#pragma once
+
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <chrono>
+
+namespace sam3_labeler {
+
+class VideoPlayer {
+public:
+    VideoPlayer() = default;
+    ~VideoPlayer() { close(); }
+    
+    bool load(const std::string& path) {
+        close();
+        
+        capture_.open(path);
+        if (!capture_.isOpened()) {
+            last_error_ = "Failed to open video: " + path;
+            return false;
+        }
+        
+        total_frames_ = static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_COUNT));
+        fps_ = capture_.get(cv::CAP_PROP_FPS);
+        current_frame_ = 0;
+        filename_ = path;
+        loaded_ = true;
+        
+        // Extract filename for display
+        size_t last_sep = path.find_last_of("/\\");
+        if (last_sep != std::string::npos) {
+            display_name_ = path.substr(last_sep + 1);
+        } else {
+            display_name_ = path;
+        }
+        
+        return true;
+    }
+    
+    void close() {
+        if (capture_.isOpened()) {
+            capture_.release();
+        }
+        loaded_ = false;
+        playing_ = false;
+        current_frame_ = 0;
+        total_frames_ = 0;
+        filename_.clear();
+        display_name_.clear();
+    }
+    
+    void play() {
+        if (loaded_) {
+            playing_ = true;
+            last_frame_time_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count();
+        }
+    }
+    
+    void pause() {
+        playing_ = false;
+    }
+    
+    void step_forward() {
+        if (!loaded_) return;
+        pause();
+        if (current_frame_ < total_frames_ - 1) {
+            current_frame_++;
+            capture_.set(cv::CAP_PROP_POS_FRAMES, current_frame_);
+        }
+    }
+    
+    void step_backward() {
+        if (!loaded_) return;
+        pause();
+        if (current_frame_ > 0) {
+            current_frame_--;
+            capture_.set(cv::CAP_PROP_POS_FRAMES, current_frame_);
+        }
+    }
+    
+    void seek(int frame_number) {
+        if (!loaded_) return;
+        pause();
+        frame_number = std::max(0, std::min(frame_number, total_frames_ - 1));
+        current_frame_ = frame_number;
+        capture_.set(cv::CAP_PROP_POS_FRAMES, current_frame_);
+    }
+    
+    bool get_frame(cv::Mat& frame) {
+        if (!loaded_) return false;
+        
+        if (playing_) {
+            // Check timing for playback speed
+            auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count();
+            
+            double frame_duration_ms = (1000.0 / fps_) / playback_speed_;
+            
+            if (now - last_frame_time_ >= frame_duration_ms) {
+                if (current_frame_ < total_frames_ - 1) {
+                    current_frame_++;
+                    capture_.read(frame);
+                    last_frame_time_ = now;
+                } else {
+                    playing_ = false;  // End of video
+                    return false;
+                }
+            } else {
+                // Return cached frame
+                capture_.set(cv::CAP_PROP_POS_FRAMES, current_frame_);
+                capture_.read(frame);
+            }
+        } else {
+            // Paused - read current frame
+            capture_.set(cv::CAP_PROP_POS_FRAMES, current_frame_);
+            capture_.read(frame);
+        }
+        
+        return !frame.empty();
+    }
+    
+    // Properties
+    bool is_playing() const { return playing_; }
+    int current_frame() const { return current_frame_; }
+    int total_frames() const { return total_frames_; }
+    double fps() const { return fps_; }
+    bool is_loaded() const { return loaded_; }
+    std::string last_error() const { return last_error_; }
+    std::string filename() const { return filename_; }
+    std::string display_name() const { return display_name_; }
+    cv::Size frame_size() const {
+        if (!loaded_) return cv::Size();
+        return cv::Size(
+            static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_WIDTH)),
+            static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_HEIGHT))
+        );
+    }
+    
+    // Speed control
+    void set_speed(double speed) { playback_speed_ = std::max(0.25, std::min(4.0, speed)); }
+    double speed() const { return playback_speed_; }
+    
+private:
+    cv::VideoCapture capture_;
+    bool loaded_ = false;
+    bool playing_ = false;
+    int current_frame_ = 0;
+    int total_frames_ = 0;
+    double fps_ = 30.0;
+    double playback_speed_ = 1.0;
+    std::string filename_;
+    std::string display_name_;
+    std::string last_error_;
+    int64_t last_frame_time_ = 0;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/video/video_player.h
+git commit -m "feat(labeler): implement VideoPlayer with playback control"
+```
+
+---
+
+### Task 5.2: Implement VideoCanvas with Texture Rendering
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/video_canvas.h`
+
+- [ ] **Step 1: Implement VideoCanvas with OpenGL texture**
+
+```cpp
+#pragma once
+
+#include <opencv2/opencv.hpp>
+#include <imgui.h>
+#include <GL/gl3w.h>
+
+namespace sam3_labeler {
+
+class App;
+
+class VideoCanvas {
+public:
+    VideoCanvas(App& app) : app_(app) {}
+    ~VideoCanvas() {
+        if (texture_id_) {
+            glDeleteTextures(1, &texture_id_);
+        }
+    }
+    
+    void render() {
+        // Render video frame texture
+        if (texture_id_ && !current_frame_.empty()) {
+            ImGui::Image(
+                reinterpret_cast<ImTextureID>(static_cast<intptr_t>(texture_id_)),
+                ImVec2(current_frame_.cols * zoom_, current_frame_.rows * zoom_)
+            );
+        } else {
+            // Placeholder when no video loaded
+            ImGui::BeginChild("NoVideo", ImVec2(640 * zoom_, 480 * zoom_), true);
+            ImGui::Text("No video loaded");
+            ImGui::Text("Use the Capture panel to load a video file");
+            ImGui::EndChild();
+        }
+    }
+    
+    void set_frame(const cv::Mat& frame) {
+        if (frame.empty()) return;
+        
+        // Convert BGR to RGB
+        cv::Mat rgb;
+        cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+        
+        // Create or update texture
+        if (!texture_id_) {
+            glGenTextures(1, &texture_id_);
+        }
+        
+        glBindTexture(GL_TEXTURE_2D, texture_id_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rgb.cols, rgb.rows, 
+                     0, GL_RGB, GL_UNSIGNED_BYTE, rgb.data);
+        
+        current_frame_ = frame.clone();
+    }
+    
+    float zoom() const { return zoom_; }
+    void set_zoom(float z) { zoom_ = std::max(0.1f, std::min(4.0f, z)); }
+    void zoom_in() { set_zoom(zoom_ * 1.25f); }
+    void zoom_out() { set_zoom(zoom_ / 1.25f); }
+    void zoom_fit(int canvas_width, int canvas_height) {
+        if (current_frame_.empty()) return;
+        float scale_x = static_cast<float>(canvas_width) / current_frame_.cols;
+        float scale_y = static_cast<float>(canvas_height) / current_frame_.rows;
+        set_zoom(std::min(scale_x, scale_y));
+    }
+    
+    cv::Size frame_size() const {
+        return current_frame_.empty() ? cv::Size() : current_frame_.size();
+    }
+    
+private:
+    App& app_;
+    cv::Mat current_frame_;
+    unsigned int texture_id_ = 0;
+    float zoom_ = 1.0f;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Add gl3w to CMakeLists.txt**
+
+Modify `SAM3TensorRT/cpp/apps/sam3_labeler/CMakeLists.txt` to add gl3w:
+
+```cmake
+# Add gl3w for OpenGL loading
+set(GL3W_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/gl3w")
+set(GL3W_SOURCES
+    "${GL3W_DIR}/src/gl3w.c"
+)
+
+add_executable(sam3_labeler ${LABELER_SOURCES} ${IMGUI_SOURCES} ${GL3W_SOURCES})
+
+target_include_directories(sam3_labeler PRIVATE
+    ${GL3W_DIR}/include
+    # ... existing includes
+)
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/video_canvas.h SAM3TensorRT/cpp/apps/sam3_labeler/CMakeLists.txt
+git commit -m "feat(labeler): implement VideoCanvas with OpenGL texture rendering"
+```
+
+---
+
+## Chunk 6: SAM3LabelerBackend Full Implementation
+
+### Task 6.1: Implement SAM3LabelerBackend with SAM3_PCS Integration
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/inference/sam3_labeler_backend.h`
+
+- [ ] **Step 1: Implement SAM3LabelerBackend**
+
+```cpp
+#pragma once
+
+#include <sam3.cuh>
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
+#include <memory>
+#include <filesystem>
+
+namespace sam3_labeler {
+
+struct DetectedBox {
+    int class_id;
+    cv::Rect2f bbox;  // Normalized 0-1
+    float confidence;
+};
+
+class Sam3LabelerBackend {
+public:
+    Sam3LabelerBackend() = default;
+    ~Sam3LabelerBackend() = default;
+    
+    bool initialize(const std::string& engine_path) {
+        // Resolve path relative to project root
+        std::string resolved_path = engine_path;
+        if (!std::filesystem::exists(resolved_path)) {
+            // Try relative to build directory
+            resolved_path = "../../../" + engine_path;
+        }
+        
+        try {
+            sam3_ = std::make_unique<SAM3_PCS>();
+            if (!sam3_->init(resolved_path)) {
+                last_error_ = "Failed to initialize SAM3 with engine: " + resolved_path;
+                sam3_.reset();
+                return false;
+            }
+            initialized_ = true;
+            return true;
+        } catch (const std::exception& e) {
+            last_error_ = std::string("SAM3 init exception: ") + e.what();
+            return false;
+        }
+    }
+    
+    std::vector<DetectedBox> infer(const cv::Mat& frame, const std::string& prompt) {
+        std::vector<DetectedBox> result;
+        
+        if (!initialized_ || !sam3_) {
+            last_error_ = "Backend not initialized";
+            return result;
+        }
+        
+        if (frame.empty()) {
+            last_error_ = "Empty frame";
+            return result;
+        }
+        
+        try {
+            // Run SAM3 inference
+            SAM3_PCS_RESULT sam3_result;
+            sam3_->infer_on_image(frame, prompt, sam3_result, SAM3_VISUALIZATION::VIS_NONE);
+            
+            // Convert to normalized boxes
+            int img_width = frame.cols;
+            int img_height = frame.rows;
+            
+            for (const auto& box : sam3_result.boxes) {
+                DetectedBox db;
+                db.class_id = 0;  // Will be set by caller
+                db.confidence = box.confidence;
+                
+                // Convert pixel coordinates to normalized 0-1
+                db.bbox.x = (box.x1 + box.x2) / 2.0f / img_width;  // x_center
+                db.bbox.y = (box.y1 + box.y2) / 2.0f / img_height; // y_center
+                db.bbox.width = (box.x2 - box.x1) / img_width;
+                db.bbox.height = (box.y2 - box.y1) / img_height;
+                
+                result.push_back(db);
+            }
+            
+            last_error_.clear();
+            
+        } catch (const std::exception& e) {
+            last_error_ = std::string("Inference exception: ") + e.what();
+        }
+        
+        return result;
+    }
+    
+    bool is_initialized() const { return initialized_; }
+    std::string last_error() const { return last_error_; }
+    
+private:
+    std::unique_ptr<SAM3_PCS> sam3_;
+    bool initialized_ = false;
+    std::string last_error_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/inference/sam3_labeler_backend.h
+git commit -m "feat(labeler): implement SAM3LabelerBackend with SAM3_PCS integration"
+```
+
+---
+
+## Chunk 7: BoxEditor Full Implementation
+
+### Task 7.1: Implement BoxEditor with Full Interaction Support
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/box_editor.h`
+
+- [ ] **Step 1: Implement BoxEditor**
+
+```cpp
+#pragma once
+
+#include "../inference/sam3_labeler_backend.h"
+#include <opencv2/opencv.hpp>
+#include <imgui.h>
+#include <vector>
+#include <deque>
+#include <algorithm>
+
+namespace sam3_labeler {
+
+enum class EditorState {
+    None,
+    Hover,
+    Selected,
+    Moving,
+    Resizing_NW, Resizing_NE, Resizing_SW, Resizing_SE,
+    Resizing_N, Resizing_S, Resizing_W, Resizing_E,
+    Creating
+};
+
+struct EditableBox {
+    int class_id = 0;
+    cv::Rect2f rect;  // Pixel coordinates
+    float confidence = 1.0f;
+};
+
+class BoxEditor {
+public:
+    BoxEditor() = default;
+    
+    void render(ImDrawList* draw_list, const ImVec2& canvas_pos, 
+                const ImVec2& canvas_size, float zoom, int img_width, int img_height) {
+        
+        if (img_width <= 0 || img_height <= 0) return;
+        
+        // Draw all boxes
+        for (size_t i = 0; i < boxes_.size(); i++) {
+            const auto& box = boxes_[i];
+            
+            // Convert to canvas coordinates
+            ImVec2 p1(canvas_pos.x + box.rect.x * zoom, 
+                      canvas_pos.y + box.rect.y * zoom);
+            ImVec2 p2(canvas_pos.x + (box.rect.x + box.rect.width) * zoom,
+                      canvas_pos.y + (box.rect.y + box.rect.height) * zoom);
+            
+            ImU32 color = get_class_color(box.class_id);
+            float thickness = (i == selected_idx_) ? 3.0f : 2.0f;
+            
+            draw_list->AddRect(p1, p2, color, 0.0f, 0, thickness);
+            
+            // Draw class label
+            ImVec2 text_pos(p1.x + 4, p1.y + 2);
+            draw_list->AddText(text_pos, color, get_class_name(box.class_id).c_str());
+            
+            // Draw resize handles for selected box
+            if (i == selected_idx_) {
+                draw_resize_handles(draw_list, p1, p2, zoom);
+            }
+        }
+    }
+    
+    bool handle_mouse(const ImVec2& mouse_pos, bool clicked, bool dragging,
+                      const ImVec2& canvas_pos, float zoom, int img_width, int img_height) {
+        
+        if (img_width <= 0 || img_height <= 0) return false;
+        
+        // Convert mouse to pixel coordinates
+        float px = (mouse_pos.x - canvas_pos.x) / zoom;
+        float py = (mouse_pos.y - canvas_pos.y) / zoom;
+        
+        if (clicked && state_ == EditorState::None) {
+            // Check for handle hit first (if box selected)
+            if (selected_idx_ >= 0 && selected_idx_ < boxes_.size()) {
+                int handle = hit_test_handle(mouse_pos, boxes_[selected_idx_].rect, canvas_pos, zoom);
+                if (handle >= 0) {
+                    state_ = static_cast<EditorState>(static_cast<int>(EditorState::Resizing_NW) + handle);
+                    drag_start_rect_ = boxes_[selected_idx_].rect;
+                    drag_start_pos_ = mouse_pos;
+                    push_undo();
+                    return true;
+                }
+            }
+            
+            // Check for box hit
+            for (int i = static_cast<int>(boxes_.size()) - 1; i >= 0; i--) {
+                if (boxes_[i].rect.contains(cv::Point2f(px, py))) {
+                    selected_idx_ = i;
+                    state_ = EditorState::Selected;
+                    return true;
+                }
+            }
+            
+            // Start creating new box
+            if (px >= 0 && px < img_width && py >= 0 && py < img_height) {
+                push_undo();
+                EditableBox new_box;
+                new_box.class_id = active_class_;
+                new_box.rect = cv::Rect2f(px, py, 0, 0);
+                boxes_.push_back(new_box);
+                selected_idx_ = static_cast<int>(boxes_.size()) - 1;
+                state_ = EditorState::Creating;
+                create_start_ = cv::Point2f(px, py);
+                return true;
+            }
+            
+            // Clicked outside - deselect
+            selected_idx_ = -1;
+            return true;
+        }
+        
+        if (dragging) {
+            if (state_ == EditorState::Creating && selected_idx_ >= 0) {
+                // Update box dimensions
+                float x1 = std::min(create_start_.x, px);
+                float y1 = std::min(create_start_.y, py);
+                float x2 = std::max(create_start_.x, px);
+                float y2 = std::max(create_start_.y, py);
+                
+                boxes_[selected_idx_].rect = cv::Rect2f(x1, y1, x2 - x1, y2 - y1);
+                return true;
+            }
+            
+            if (state_ == EditorState::Selected) {
+                // Started dragging selected box
+                state_ = EditorState::Moving;
+                drag_start_pos_ = mouse_pos;
+                drag_start_rect_ = boxes_[selected_idx_].rect;
+                return true;
+            }
+            
+            if (state_ == EditorState::Moving && selected_idx_ >= 0) {
+                // Move the box
+                float dx = (mouse_pos.x - drag_start_pos_.x) / zoom;
+                float dy = (mouse_pos.y - drag_start_pos_.y) / zoom;
+                boxes_[selected_idx_].rect = drag_start_rect_ + cv::Point2f(dx, dy);
+                return true;
+            }
+            
+            if (is_resize_state() && selected_idx_ >= 0) {
+                // Handle resize
+                handle_resize(mouse_pos, zoom, img_width, img_height);
+                return true;
+            }
+        }
+        
+        if (!dragging && !clicked) {
+            // Mouse released
+            if (state_ == EditorState::Creating) {
+                // Remove if too small
+                if (boxes_[selected_idx_].rect.width < 10 || boxes_[selected_idx_].rect.height < 10) {
+                    boxes_.erase(boxes_.begin() + selected_idx_);
+                    selected_idx_ = -1;
+                }
+            }
+            state_ = EditorState::None;
+        }
+        
+        return false;
+    }
+    
+    bool handle_keyboard(int key) {
+        if (key == ImGuiKey_Delete || key == ImGuiKey_Backspace) {
+            delete_selected();
+            return true;
+        }
+        if (key == ImGuiKey_Escape) {
+            selected_idx_ = -1;
+            state_ = EditorState::None;
+            return true;
+        }
+        if (key == ImGuiKey_Z && ImGui::GetIO().KeyCtrl) {
+            if (ImGui::GetIO().KeyShift) {
+                redo();
+            } else {
+                undo();
+            }
+            return true;
+        }
+        return false;
+    }
+    
+    std::vector<DetectedBox> get_boxes_normalized(int img_width, int img_height) const {
+        std::vector<DetectedBox> result;
+        for (const auto& box : boxes_) {
+            DetectedBox db;
+            db.class_id = box.class_id;
+            db.confidence = box.confidence;
+            db.bbox.x = (box.rect.x + box.rect.width / 2.0f) / img_width;   // x_center
+            db.bbox.y = (box.rect.y + box.rect.height / 2.0f) / img_height; // y_center
+            db.bbox.width = box.rect.width / img_width;
+            db.bbox.height = box.rect.height / img_height;
+            result.push_back(db);
+        }
+        return result;
+    }
+    
+    void set_boxes_from_normalized(const std::vector<DetectedBox>& boxes, 
+                                    int img_width, int img_height) {
+        push_undo();
+        boxes_.clear();
+        for (const auto& db : boxes) {
+            EditableBox eb;
+            eb.class_id = db.class_id;
+            eb.confidence = db.confidence;
+            eb.rect.x = (db.bbox.x - db.bbox.width / 2.0f) * img_width;
+            eb.rect.y = (db.bbox.y - db.bbox.height / 2.0f) * img_height;
+            eb.rect.width = db.bbox.width * img_width;
+            eb.rect.height = db.bbox.height * img_height;
+            boxes_.push_back(eb);
+        }
+    }
+    
+    void clear() { push_undo(); boxes_.clear(); selected_idx_ = -1; }
+    bool empty() const { return boxes_.empty(); }
+    size_t count() const { return boxes_.size(); }
+    int selected_index() const { return selected_idx_; }
+    
+    void delete_selected() {
+        if (selected_idx_ >= 0 && selected_idx_ < boxes_.size()) {
+            push_undo();
+            boxes_.erase(boxes_.begin() + selected_idx_);
+            selected_idx_ = -1;
+        }
+    }
+    
+    EditorState state() const { return state_; }
+    
+    bool can_undo() const { return !undo_stack_.empty(); }
+    bool can_redo() const { return !redo_stack_.empty(); }
+    
+    void undo() {
+        if (!undo_stack_.empty()) {
+            redo_stack_.push_back(boxes_);
+            boxes_ = undo_stack_.back();
+            undo_stack_.pop_back();
+            selected_idx_ = -1;
+        }
+    }
+    
+    void redo() {
+        if (!redo_stack_.empty()) {
+            undo_stack_.push_back(boxes_);
+            boxes_ = redo_stack_.back();
+            redo_stack_.pop_back();
+            selected_idx_ = -1;
+        }
+    }
+    
+    void set_active_class(int class_id) { active_class_ = class_id; }
+    int active_class() const { return active_class_; }
+    
+    static ImU32 get_class_color(int class_id) {
+        static const ImU32 colors[] = {
+            IM_COL32(255, 50, 50, 255),     // 0: player (red)
+            IM_COL32(50, 255, 50, 255),     // 1: bot (green)
+            IM_COL32(50, 50, 255, 255),     // 2: weapon (blue)
+            IM_COL32(255, 255, 50, 255),    // 3: outline (yellow)
+            IM_COL32(128, 128, 128, 255),   // 4: dead_body (gray)
+            IM_COL32(255, 128, 0, 255),     // 5: hideout_target_human (orange)
+            IM_COL32(128, 0, 255, 255),     // 6: hideout_target_balls (purple)
+            IM_COL32(255, 0, 255, 255),     // 7: head (magenta)
+            IM_COL32(150, 150, 150, 255),   // 8: smoke (light gray)
+            IM_COL32(255, 100, 0, 255),     // 9: fire (orange-red)
+            IM_COL32(0, 255, 255, 255),     // 10: third_person (cyan)
+        };
+        return colors[class_id % 11];
+    }
+    
+    static std::string get_class_name(int class_id) {
+        static const char* names[] = {
+            "player", "bot", "weapon", "outline", "dead_body",
+            "hideout_target_human", "hideout_target_balls", "head",
+            "smoke", "fire", "third_person"
+        };
+        return names[class_id % 11];
+    }
+    
+private:
+    std::vector<EditableBox> boxes_;
+    int selected_idx_ = -1;
+    EditorState state_ = EditorState::None;
+    int active_class_ = 0;
+    
+    cv::Point2f create_start_;
+    cv::Rect2f drag_start_rect_;
+    ImVec2 drag_start_pos_;
+    
+    std::deque<std::vector<EditableBox>> undo_stack_;
+    std::deque<std::vector<EditableBox>> redo_stack_;
+    static constexpr size_t MAX_HISTORY = 50;
+    
+    void push_undo() {
+        undo_stack_.push_back(boxes_);
+        if (undo_stack_.size() > MAX_HISTORY) undo_stack_.pop_front();
+        redo_stack_.clear();
+    }
+    
+    bool is_resize_state() const {
+        return state_ >= EditorState::Resizing_NW && state_ <= EditorState::Resizing_E;
+    }
+    
+    int hit_test_handle(const ImVec2& mouse_pos, const cv::Rect2f& rect, 
+                        const ImVec2& canvas_pos, float zoom) {
+        float handle_size = 8.0f;
+        
+        // Calculate handle positions (corners and edges)
+        float x1 = canvas_pos.x + rect.x * zoom;
+        float y1 = canvas_pos.y + rect.y * zoom;
+        float x2 = canvas_pos.x + (rect.x + rect.width) * zoom;
+        float y2 = canvas_pos.y + (rect.y + rect.height) * zoom;
+        float xc = (x1 + x2) / 2;
+        float yc = (y1 + y2) / 2;
+        
+        // Check handles: 0=NW, 1=NE, 2=SW, 3=SE, 4=N, 5=S, 6=W, 7=E
+        struct Handle { float x, y; };
+        Handle handles[] = {
+            {x1, y1}, {x2, y1}, {x1, y2}, {x2, y2},  // corners
+            {xc, y1}, {xc, y2}, {x1, yc}, {x2, yc}   // edges
+        };
+        
+        for (int i = 0; i < 8; i++) {
+            if (std::abs(mouse_pos.x - handles[i].x) < handle_size &&
+                std::abs(mouse_pos.y - handles[i].y) < handle_size) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    
+    void draw_resize_handles(ImDrawList* draw_list, const ImVec2& p1, const ImVec2& p2, float zoom) {
+        float size = 6.0f;
+        ImU32 color = IM_COL32(255, 255, 255, 255);
+        
+        // Corners
+        draw_list->AddRectFilled(ImVec2(p1.x - size/2, p1.y - size/2), 
+                                  ImVec2(p1.x + size/2, p1.y + size/2), color);
+        draw_list->AddRectFilled(ImVec2(p2.x - size/2, p1.y - size/2), 
+                                  ImVec2(p2.x + size/2, p1.y + size/2), color);
+        draw_list->AddRectFilled(ImVec2(p1.x - size/2, p2.y - size/2), 
+                                  ImVec2(p1.x + size/2, p2.y + size/2), color);
+        draw_list->AddRectFilled(ImVec2(p2.x - size/2, p2.y - size/2), 
+                                  ImVec2(p2.x + size/2, p2.y + size/2), color);
+    }
+    
+    void handle_resize(const ImVec2& mouse_pos, float zoom, int img_width, int img_height) {
+        if (selected_idx_ < 0) return;
+        
+        float dx = (mouse_pos.x - drag_start_pos_.x) / zoom;
+        float dy = (mouse_pos.y - drag_start_pos_.y) / zoom;
+        
+        cv::Rect2f r = drag_start_rect_;
+        
+        // Apply resize based on handle
+        switch (state_) {
+            case EditorState::Resizing_NW:  // Top-left
+                r.x += dx; r.y += dy;
+                r.width -= dx; r.height -= dy;
+                break;
+            case EditorState::Resizing_NE:  // Top-right
+                r.y += dy;
+                r.width += dx; r.height -= dy;
+                break;
+            case EditorState::Resizing_SW:  // Bottom-left
+                r.x += dx;
+                r.width -= dx; r.height += dy;
+                break;
+            case EditorState::Resizing_SE:  // Bottom-right
+                r.width += dx; r.height += dy;
+                break;
+            case EditorState::Resizing_N:   // Top
+                r.y += dy; r.height -= dy;
+                break;
+            case EditorState::Resizing_S:   // Bottom
+                r.height += dy;
+                break;
+            case EditorState::Resizing_W:   // Left
+                r.x += dx; r.width -= dx;
+                break;
+            case EditorState::Resizing_E:   // Right
+                r.width += dx;
+                break;
+            default:
+                break;
+        }
+        
+        // Clamp to image bounds
+        r.x = std::max(0.0f, r.x);
+        r.y = std::max(0.0f, r.y);
+        r.width = std::min(r.width, img_width - r.x);
+        r.height = std::min(r.height, img_height - r.y);
+        
+        // Ensure minimum size
+        if (r.width > 5 && r.height > 5) {
+            boxes_[selected_idx_].rect = r;
+        }
+    }
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/box_editor.h
+git commit -m "feat(labeler): implement BoxEditor with full interaction support"
+```
+
+---
+
+## Chunk 8: UIRenderer Integration and Keyboard Shortcuts
+
+### Task 8.1: Implement UIRenderer with Full Layout
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/ui_renderer.h`
+
+- [ ] **Step 1: Implement UIRenderer**
+
+```cpp
+#pragma once
+
+#include "panels/capture_panel.h"
+#include "panels/labels_panel.h"
+#include "panels/settings_panel.h"
+#include "panels/log_console.h"
+#include "canvas/video_canvas.h"
+#include "canvas/box_editor.h"
+
+namespace sam3_labeler {
+
+class App;
+
+class UIRenderer {
+public:
+    UIRenderer(App& app) 
+        : app_(app),
+          capture_panel_(app),
+          labels_panel_(app),
+          settings_panel_(app),
+          video_canvas_(app) {}
+    
+    void render() {
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(window_width_, window_height_));
+        
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Main", nullptr, 
+                     ImGuiWindowFlags_NoTitleBar | 
+                     ImGuiWindowFlags_NoResize | 
+                     ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::PopStyleVar();
+        
+        render_left_panel();
+        ImGui::SameLine();
+        render_main_area();
+        
+        ImGui::End();
+    }
+    
+    // Panel state (accordion)
+    bool capture_expanded_ = true;
+    bool labels_expanded_ = false;
+    bool settings_expanded_ = false;
+    bool log_expanded_ = true;
+    
+    VideoCanvas& video_canvas() { return video_canvas_; }
+    BoxEditor& box_editor() { return box_editor_; }
+    LogConsole& log_console() { return log_console_; }
+    
+private:
+    App& app_;
+    
+    CapturePanel capture_panel_;
+    LabelsPanel labels_panel_;
+    SettingsPanel settings_panel_;
+    LogConsole log_console_;
+    VideoCanvas video_canvas_;
+    BoxEditor box_editor_;
+    
+    // Layout from UI_DESIGN_SPEC.md
+    static constexpr int window_width_ = 1014;
+    static constexpr int window_height_ = 730;
+    static constexpr int LEFT_PANEL_WIDTH = 256;
+    static constexpr int LOG_EXPANDED_HEIGHT = 192;
+    static constexpr int LOG_COLLAPSED_HEIGHT = 40;
+    static constexpr int TOOLBAR_HEIGHT = 48;
+    
+    void render_left_panel() {
+        ImGui::BeginChild("LeftPanel", ImVec2(LEFT_PANEL_WIDTH, 0), true);
+        
+        // Header
+        ImGui::Text("Editor Options");
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Accordion sections
+        render_accordion_section("Capture", capture_expanded_, [this]() {
+            capture_panel_.render();
+        });
+        
+        render_accordion_section("Labels", labels_expanded_, [this]() {
+            labels_panel_.render();
+        });
+        
+        render_accordion_section("Settings", settings_expanded_, [this]() {
+            settings_panel_.render();
+        });
+        
+        ImGui::EndChild();
+    }
+    
+    template<typename Func>
+    void render_accordion_section(const char* name, bool& expanded, Func render_content) {
+        ImGui::PushID(name);
+        
+        // Header with expand indicator
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.153f, 0.153f, 0.165f, 1.0f));
+        if (ImGui::CollapsingHeader(name, ImGuiTreeNodeFlags_AllowItemOverlap)) {
+            expanded = true;
+        } else {
+            expanded = false;
+        }
+        ImGui::PopStyleColor();
+        
+        if (expanded) {
+            ImGui::Indent(8);
+            render_content();
+            ImGui::Unindent(8);
+        }
+        
+        ImGui::PopID();
+    }
+    
+    void render_main_area() {
+        float log_height = log_expanded_ ? LOG_EXPANDED_HEIGHT : LOG_COLLAPSED_HEIGHT;
+        float main_height = window_height_ - log_height;
+        
+        // Toolbar + Canvas
+        ImGui::BeginChild("MainArea", ImVec2(0, main_height), false);
+        
+        render_toolbar();
+        
+        // Canvas area
+        ImGui::BeginChild("Canvas", ImVec2(0, 0), false);
+        video_canvas_.render();
+        ImGui::EndChild();
+        
+        ImGui::EndChild();
+        
+        // Log console
+        log_console_.render(log_expanded_);
+    }
+    
+    void render_toolbar() {
+        ImGui::BeginChild("Toolbar", ImVec2(0, TOOLBAR_HEIGHT), true);
+        
+        // Left: Title
+        ImGui::Text("Canvas");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(1920 x 1080)");  // TODO: actual frame size
+        
+        // Right: Zoom controls
+        float right_x = ImGui::GetWindowWidth() - 200;
+        ImGui::SameLine(right_x);
+        
+        if (ImGui::Button("-##zoomout", ImVec2(32, 0))) {
+            video_canvas_.zoom_out();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom Out");
+        
+        ImGui::SameLine();
+        ImGui::Text("%d%%", static_cast<int>(video_canvas_.zoom() * 100));
+        
+        ImGui::SameLine();
+        if (ImGui::Button("+##zoomin", ImVec2(32, 0))) {
+            video_canvas_.zoom_in();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zoom In");
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Fit", ImVec2(32, 0))) {
+            // Fit to canvas
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fit to Window");
+        
+        ImGui::EndChild();
+    }
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/ui_renderer.h
+git commit -m "feat(labeler): implement UIRenderer with full layout"
+```
+
+---
+
+### Task 8.2: Add Classes.txt Loader
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/app/class_loader.h`
+
+- [ ] **Step 1: Create class_loader.h**
+
+```cpp
+#pragma once
+
+#include <string>
+#include <vector>
+#include <fstream>
+#include <filesystem>
+
+namespace sam3_labeler {
+
+struct ClassInfo {
+    int id;
+    std::string name;
+};
+
+class ClassLoader {
+public:
+    bool load(const std::string& path) {
+        classes_.clear();
+        
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            last_error_ = "Failed to open classes file: " + path;
+            return false;
+        }
+        
+        std::string line;
+        int id = 0;
+        while (std::getline(file, line)) {
+            if (!line.empty()) {
+                classes_.push_back({id++, line});
+            }
+        }
+        
+        return !classes_.empty();
+    }
+    
+    const std::vector<ClassInfo>& classes() const { return classes_; }
+    std::string class_name(int id) const {
+        if (id >= 0 && id < classes_.size()) {
+            return classes_[id].name;
+        }
+        return "unknown";
+    }
+    int class_count() const { return classes_.size(); }
+    std::string last_error() const { return last_error_; }
+    
+    // Try to find classes.txt in common locations
+    static std::string find_classes_file(const std::string& output_dir) {
+        std::vector<std::string> candidates = {
+            output_dir + "/labels/classes.txt",
+            output_dir + "/classes.txt",
+            "scripts/training/datasets/game/labels/classes.txt"
+        };
+        
+        for (const auto& path : candidates) {
+            if (std::filesystem::exists(path)) {
+                return path;
+            }
+        }
+        return "";
+    }
+    
+private:
+    std::vector<ClassInfo> classes_;
+    std::string last_error_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/class_loader.h
+git commit -m "feat(labeler): add ClassLoader for classes.txt"
+```
+
+---
+
 ## Summary
 
-This plan covers the full implementation of the SAM3 Video Labeler across 4 chunks:
+This expanded plan covers the full implementation of the SAM3 Video Labeler:
 
 1. **Chunk 1**: Project setup, CMake, App class, ImGui init, dark theme
-2. **Chunk 2**: SAM3 integration, MultiPromptRunner, BoxEditor
+2. **Chunk 2**: SAM3 integration headers
 3. **Chunk 3**: YOLOExporter
-4. **Chunk 4**: UI panel implementations
+4. **Chunk 4**: UI panel stubs
+5. **Chunk 5**: VideoPlayer and VideoCanvas with OpenGL textures
+6. **Chunk 6**: SAM3LabelerBackend with SAM3_PCS integration
+7. **Chunk 7**: BoxEditor with full interaction (select, move, resize, create, undo/redo)
+8. **Chunk 8**: UIRenderer integration, ClassLoader
 
 Each task has exact file paths, complete code, and commit commands. Follow the tasks in order, committing after each completed step.
 
