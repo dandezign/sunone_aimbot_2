@@ -108,7 +108,7 @@ target_include_directories(sam3_labeler PRIVATE
 )
 
 target_link_libraries(sam3_labeler PRIVATE
-    sam3_trt
+    sam3_trt  # Defined in parent CMakeLists.txt - links SAM3 TensorRT library
     ${OpenCV_LIBS}
     yaml-cpp
     glfw
@@ -622,6 +622,11 @@ git commit -m "feat(labeler): add default config.yaml"
 Append after the struct definitions:
 
 ```cpp
+#include <yaml-cpp/yaml.h>
+#include <fstream>
+
+namespace sam3_labeler {
+
 // YAML conversion for PromptConfig
 inline YAML::Emitter& operator<<(YAML::Emitter& out, const PromptConfig& p) {
     out << YAML::BeginMap;
@@ -911,16 +916,26 @@ git commit -m "feat(labeler): add UI panel stub headers"
 
 ### Task 1.11: Build and Test
 
-- [ ] **Step 1: Build the labeler**
+- [ ] **Step 1: Configure CMake (if not already configured)**
 
 ```bash
 cd I:\CppProjects\sunone_aimbot_2
+cmake -S SAM3TensorRT -B build/sam3 -G "Visual Studio 18 2026" -A x64 `
+  -T "cuda=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" `
+  -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler"
+```
+
+Note: This uses the same configuration as the existing SAM3 build. If `build/sam3` already exists with SAM3 configured, you can skip this step.
+
+- [ ] **Step 2: Build the labeler**
+
+```bash
 cmake --build build/sam3 --config Release --target sam3_labeler
 ```
 
 Expected: Build succeeds with no errors
 
-- [ ] **Step 2: Run the labeler**
+- [ ] **Step 3: Run the labeler**
 
 ```bash
 .\build\sam3\Release\sam3_labeler.exe
