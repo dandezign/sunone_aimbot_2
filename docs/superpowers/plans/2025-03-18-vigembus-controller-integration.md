@@ -12,12 +12,54 @@
 
 ---
 
+## Prerequisites
+
+### Required Libraries
+
+Before building, the following libraries must be set up:
+
+#### 1. hidapi
+- Download from: https://github.com/libusb/hidapi/releases
+- Extract to: `third_party/hidapi/`
+- Required structure:
+  ```
+  third_party/hidapi/
+  ├── include/
+  │   └── hidapi.h
+  ├── lib/
+  │   └── hidapi.lib
+  └── bin/
+      └── hidapi.dll
+  ```
+
+#### 2. ViGEmClient
+- Download SDK from: https://github.com/nefarius/ViGEmClient/releases
+- Extract to: `third_party/vigem/`
+- Required structure:
+  ```
+  third_party/vigem/
+  ├── include/
+  │   └── ViGEm/
+  │       └── Client.h
+  ├── lib/
+  │   └── ViGEmClient.lib
+  └── bin/
+      └── ViGEmClient.dll
+  ```
+
+#### 3. ViGEmBus Driver (Runtime)
+- Install from: https://github.com/nefarius/ViGEmBus/releases
+- Required for virtual controller to work at runtime
+
+---
+
 ## File Structure
 
 ### New Files to Create
 
 | File | Purpose | Lines Est. |
 |------|---------|------------|
+| `controller/controller_config.h` | Controller config struct | 40 |
 | `controller/controller_state.h` | State struct definition | 50 |
 | `controller/thread_safe_queue.h` | Thread-safe MPSC queue | 100 |
 | `controller/ds4_button_encoding.h` | Button bitmask constants | 80 |
@@ -29,17 +71,19 @@
 | `controller/controller_bridge.h` | Bridge header | 80 |
 | `controller/controller_bridge.cpp` | Bridge implementation | 250 |
 | `controller/controller_manager.h` | Manager header | 80 |
-| `controller/controller_manager.cpp` | Manager implementation | 200 |
+| `controller/controller_manager.cpp` | Manager implementation | 280 |
+| `controller/vigem_output_thread.h` | ViGEm output thread header | 50 |
+| `controller/vigem_output_thread.cpp` | ViGEm output thread impl | 80 |
 | `overlay/draw_controller.cpp` | UI overlay | 150 |
 | `tests/controller_unit_tests.cpp` | Unit tests | 200 |
-| **Total** | | **~1820 lines** |
+| **Total** | | **~2070 lines** |
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `config/config.h` | Add ControllerConfig struct |
-| `config/config.cpp` | Parse controller config JSON |
+| `config/config.h` | Add ControllerConfig include and member |
+| `config/config.cpp` | Parse controller config INI |
 | `sunone_aimbot_2.cpp` | Initialize controller, integrate with aimbot |
 | `sunone_aimbot_2.h` | Include controller headers |
 | `mouse/mouse.cpp` | Inject aim into controller bridge |
@@ -347,9 +391,9 @@ git commit -m "feat(controller): add axis conversion utilities with NaN/Inf hand
 
 #include <cstdint>
 #include <string>
-#include "../../controller/controller_state.h"
-#include "../../controller/axis_conversion.h"
-#include "../../controller/ds4_button_encoding.h"
+#include "sunone_aimbot_2/controller/controller_state.h"
+#include "sunone_aimbot_2/controller/axis_conversion.h"
+#include "sunone_aimbot_2/controller/ds4_button_encoding.h"
 
 // Forward declarations for ViGEm types (will be defined when including ViGEm headers)
 typedef void* PVIGEM_CLIENT;
@@ -419,6 +463,40 @@ git commit -m "feat(controller): add DS4_REPORT structure and Ds4Gamepad header"
 
 ---
 
+### Task 5b: ControllerConfig Structure
+
+**Files:**
+- Create: `sunone_aimbot_2/controller/controller_config.h`
+
+- [ ] **Step 1: Write controller_config.h**
+
+```cpp
+// sunone_aimbot_2/controller/controller_config.h
+#pragma once
+
+struct ControllerConfig {
+    bool enabled = false;
+    bool auto_connect = true;
+    int polling_rate_hz = 1000;
+    bool enable_aimbot_injection = true;
+    bool show_overlay = true;
+    bool invert_left_stick_y = false;
+    bool invert_right_stick_y = false;
+    float aimbot_sensitivity = 1.0f;
+    float left_stick_deadzone = 0.05f;
+    float right_stick_deadzone = 0.05f;
+};
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add sunone_aimbot_2/controller/controller_config.h
+git commit -m "feat(controller): add ControllerConfig struct"
+```
+
+---
+
 ## Chunk 2: ViGEmBus Integration
 
 ### Task 6: Ds4Gamepad Implementation
@@ -430,11 +508,13 @@ git commit -m "feat(controller): add DS4_REPORT structure and Ds4Gamepad header"
 
 ```cpp
 // sunone_aimbot_2/controller/ds4_gamepad.cpp
-#include "ds4_gamepad.h"
+#include "sunone_aimbot_2/controller/ds4_gamepad.h"
 #include <iostream>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 // ViGEm function pointer types
+// Note: vigem_target_ds4_update takes a pointer to DS4_REPORT, not the struct by value
 typedef void* (*VigemAllocFunc)();
 typedef void (*VigemFreeFunc)(void*);
 typedef uint32_t (*VigemConnectFunc)(void*);
@@ -443,7 +523,7 @@ typedef void* (*VigemTargetDs4AllocFunc)();
 typedef void (*VigemTargetFreeFunc)(void*);
 typedef uint32_t (*VigemTargetAddFunc)(void*, void*);
 typedef uint32_t (*VigemTargetRemoveFunc)(void*, void*);
-typedef uint32_t (*VigemTargetDs4UpdateFunc)(void*, void*, DS4_REPORT);
+typedef uint32_t (*VigemTargetDs4UpdateFunc)(void*, void*, const DS4_REPORT*);
 
 struct VigemFunctions {
     HMODULE module = nullptr;
@@ -574,7 +654,7 @@ bool Ds4Gamepad::update(const DS4_REPORT& report) {
         return false;
     }
     
-    uint32_t err = g_vigem.targetDs4Update(client_, target_, report);
+    uint32_t err = g_vigem.targetDs4Update(client_, target_, &report);
     return err == 0x20000000;
 }
 ```
@@ -606,9 +686,10 @@ git commit -m "feat(controller): implement Ds4Gamepad with ViGEmBus integration"
 #include <string>
 #include <optional>
 #include <vector>
+#include <array>
 #include <cstdint>
-#include "controller_state.h"
-#include "thread_safe_queue.h"
+#include "sunone_aimbot_2/controller/controller_state.h"
+#include "sunone_aimbot_2/controller/thread_safe_queue.h"
 
 struct DeviceInfo {
     std::string path;
@@ -632,14 +713,17 @@ private:
     bool pollDevice(void* device);  // hid_device* as void* to avoid header dependency
     std::optional<ControllerState> parseHidReport(const std::vector<uint8_t>& report);
     
+    // Wide string to UTF-8 conversion helper
+    static std::string wideToUtf8(const wchar_t* wstr);
+    
     std::thread thread_;
     std::atomic<bool> stop_flag_{false};
     std::atomic<bool> running_{false};
     ThreadSafeQueue<ControllerState>* output_queue_ = nullptr;
     
-    // Sony VID and DualSense PIDs
+    // Sony VID and DualSense PIDs (using std::array for type safety)
     static constexpr uint16_t kSonyVid = 0x054C;
-    static constexpr uint16_t kDualSensePids[4] = {
+    static constexpr std::array<uint16_t, 4> kDualSensePids = {
         0x0CE6,  // DualSense USB/Bluetooth
         0x0DF2,  // DualSense Edge
         0x0E5F,  // DualSense revision
@@ -654,7 +738,7 @@ private:
 
 ```bash
 git add sunone_aimbot_2/controller/hid_input_thread.h
-git commit -m "feat(controller): add HidInputThread header"
+git commit -m "feat(controller): add HidInputThread header with std::array"
 ```
 
 ---
@@ -664,22 +748,42 @@ git commit -m "feat(controller): add HidInputThread header"
 **Files:**
 - Create: `sunone_aimbot_2/controller/hid_input_thread.cpp`
 
-- [ ] **Step 1: Write hid_input_thread.cpp (Part 1 - Detection)**
+- [ ] **Step 1: Write hid_input_thread.cpp (Part 1 - Lifecycle and Wide String Helper)**
 
 ```cpp
 // sunone_aimbot_2/controller/hid_input_thread.cpp
-#include "hid_input_thread.h"
+#include "sunone_aimbot_2/controller/hid_input_thread.h"
+#include "sunone_aimbot_2/controller/axis_conversion.h"
+#include "sunone_aimbot_2/controller/ds4_button_encoding.h"
 #include <iostream>
 #include <chrono>
 #include <cstring>
 
-// hidapi header
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <hidapi.h>
 
 HidInputThread::HidInputThread() = default;
 
 HidInputThread::~HidInputThread() {
     stop();
+}
+
+// Convert wide string (wchar_t*) to UTF-8 std::string
+// Required because hid_device_info::serial_number and ::product_string are wchar_t* on Windows
+std::string HidInputThread::wideToUtf8(const wchar_t* wstr) {
+    if (!wstr) {
+        return "";
+    }
+    
+    int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) {
+        return "";
+    }
+    
+    std::string result(len - 1, '\0');  // len includes null terminator
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, nullptr, nullptr);
+    return result;
 }
 
 void HidInputThread::start() {
@@ -787,10 +891,15 @@ std::optional<DeviceInfo> HidInputThread::findDualSenseDevice() {
             if (cur_dev->product_id == pid) {
                 DeviceInfo info;
                 info.path = cur_dev->path ? cur_dev->path : "";
-                info.serial_number = cur_dev->serial_number ? 
-                    reinterpret_cast<const char*>(cur_dev->serial_number) : "unknown";
-                info.product_string = cur_dev->product_string ? 
-                    reinterpret_cast<const char*>(cur_dev->product_string) : "DualSense";
+                // Use proper wide string conversion for Windows
+                info.serial_number = wideToUtf8(cur_dev->serial_number);
+                if (info.serial_number.empty()) {
+                    info.serial_number = "unknown";
+                }
+                info.product_string = wideToUtf8(cur_dev->product_string);
+                if (info.product_string.empty()) {
+                    info.product_string = "DualSense";
+                }
                 
                 result = info;
                 break;
@@ -889,7 +998,7 @@ std::optional<ControllerState> HidInputThread::parseHidReport(const std::vector<
 
 ```bash
 git add sunone_aimbot_2/controller/hid_input_thread.cpp
-git commit -m "feat(controller): implement HID input thread with DualSense detection"
+git commit -m "feat(controller): implement HID input thread with proper wide string handling"
 ```
 
 ---
@@ -910,9 +1019,14 @@ git commit -m "feat(controller): implement HID input thread with DualSense detec
 #include <thread>
 #include <atomic>
 #include <memory>
-#include "controller_state.h"
-#include "ds4_gamepad.h"
-#include "thread_safe_queue.h"
+#include <functional>
+#include "sunone_aimbot_2/controller/controller_state.h"
+#include "sunone_aimbot_2/controller/controller_config.h"
+#include "sunone_aimbot_2/controller/ds4_gamepad.h"
+#include "sunone_aimbot_2/controller/thread_safe_queue.h"
+
+// Callback type for state updates (used to update ControllerManager's current_state_)
+using StateCallback = std::function<void(const ControllerState&)>;
 
 class ControllerBridge {
 public:
@@ -929,6 +1043,12 @@ public:
     void setInputQueue(ThreadSafeQueue<ControllerState>* input) { input_queue_ = input; }
     void setOutputQueue(ThreadSafeQueue<DS4_REPORT>* output) { output_queue_ = output; }
     
+    // Configuration (for deadzone and inversion settings)
+    void setConfig(const ControllerConfig* config) { config_ = config; }
+    
+    // State callback (for updating ControllerManager's current_state_)
+    void setStateCallback(StateCallback callback) { state_callback_ = std::move(callback); }
+    
     // Aimbot injection
     void injectAimInput(float delta_x, float delta_y);
     void setAimbotActive(bool active) { aimbot_active_.store(active); }
@@ -936,10 +1056,14 @@ public:
 private:
     void run();
     void processState(ControllerState& state);
+    void applyDeadzone(ControllerState& state);
     DS4_REPORT encodeToDs4(const ControllerState& state);
     
     ThreadSafeQueue<ControllerState>* input_queue_ = nullptr;
     ThreadSafeQueue<DS4_REPORT>* output_queue_ = nullptr;
+    
+    const ControllerConfig* config_ = nullptr;
+    StateCallback state_callback_;
     
     std::thread thread_;
     std::atomic<bool> stop_flag_{false};
@@ -973,9 +1097,11 @@ git commit -m "feat(controller): add ControllerBridge header"
 
 ```cpp
 // sunone_aimbot_2/controller/controller_bridge.cpp
-#include "controller_bridge.h"
+#include "sunone_aimbot_2/controller/controller_bridge.h"
+#include "sunone_aimbot_2/controller/axis_conversion.h"
 #include <iostream>
 #include <chrono>
+#include <cmath>
 
 ControllerBridge::ControllerBridge() = default;
 
@@ -1017,8 +1143,13 @@ void ControllerBridge::run() {
             
             // Read from input queue with timeout
             if (input_queue_ && input_queue_->pop_timeout(state, std::chrono::milliseconds(10))) {
-                // Process state (apply aimbot injection)
+                // Process state (apply deadzone, aimbot injection)
                 processState(state);
+                
+                // Update current_state_ via callback (for UI overlay)
+                if (state_callback_) {
+                    state_callback_(state);
+                }
                 
                 // Encode to DS4 report
                 DS4_REPORT report = encodeToDs4(state);
@@ -1073,6 +1204,20 @@ void ControllerBridge::processState(ControllerState& state) {
         return;
     }
     
+    // Apply deadzone to stick inputs (compensates for stick drift)
+    applyDeadzone(state);
+    
+    // Apply stick inversion from config
+    if (config_) {
+        if (config_->invert_left_stick_y) {
+            state.left_stick.y = -state.left_stick.y;
+        }
+        if (config_->invert_right_stick_y) {
+            state.right_stick.y = -state.right_stick.y;
+        }
+    }
+    
+    // Apply aimbot injection
     if (aimbot_active_.load()) {
         float dx = aim_delta_x_.load();
         float dy = aim_delta_y_.load();
@@ -1082,6 +1227,36 @@ void ControllerBridge::processState(ControllerState& state) {
         state.right_stick.y = std::clamp(state.right_stick.y + dy, -1.0f, 1.0f);
         state.aimbot_modified = true;
     }
+}
+
+void ControllerBridge::applyDeadzone(ControllerState& state) {
+    if (!config_) {
+        return;
+    }
+    
+    // Helper lambda to apply deadzone to a single axis
+    // Maps [0, deadzone] -> 0 and [deadzone, 1] -> [0, 1]
+    auto applyDeadzoneToAxis = [](float value, float deadzone) -> float {
+        if (!std::isfinite(value) || !std::isfinite(deadzone)) {
+            return 0.0f;
+        }
+        
+        float abs_value = std::abs(value);
+        if (abs_value < deadzone) {
+            return 0.0f;
+        }
+        
+        // Rescale: map [deadzone, 1] to [0, 1]
+        float sign = value >= 0.0f ? 1.0f : -1.0f;
+        float scaled = (abs_value - deadzone) / (1.0f - deadzone);
+        return sign * std::clamp(scaled, 0.0f, 1.0f);
+    };
+    
+    // Apply deadzone to sticks
+    state.left_stick.x = applyDeadzoneToAxis(state.left_stick.x, config_->left_stick_deadzone);
+    state.left_stick.y = applyDeadzoneToAxis(state.left_stick.y, config_->left_stick_deadzone);
+    state.right_stick.x = applyDeadzoneToAxis(state.right_stick.x, config_->right_stick_deadzone);
+    state.right_stick.y = applyDeadzoneToAxis(state.right_stick.y, config_->right_stick_deadzone);
 }
 
 DS4_REPORT ControllerBridge::encodeToDs4(const ControllerState& state) {
@@ -1117,6 +1292,108 @@ git commit -m "feat(controller): implement ControllerBridge with aimbot injectio
 
 ---
 
+## Chunk 4b: ViGEm Output Thread (CRITICAL - Was Missing)
+
+### Task 10b: ViGEm Output Thread
+
+**Files:**
+- Create: `sunone_aimbot_2/controller/vigem_output_thread.h`
+- Create: `sunone_aimbot_2/controller/vigem_output_thread.cpp`
+
+- [ ] **Step 1: Write vigem_output_thread.h**
+
+```cpp
+// sunone_aimbot_2/controller/vigem_output_thread.h
+#pragma once
+
+#include <thread>
+#include <atomic>
+#include "sunone_aimbot_2/controller/ds4_gamepad.h"
+#include "sunone_aimbot_2/controller/thread_safe_queue.h"
+
+class VigemOutputThread {
+public:
+    VigemOutputThread();
+    ~VigemOutputThread();
+    
+    void start();
+    void stop();
+    bool isRunning() const { return running_.load(); }
+    
+    void setGamepad(Ds4Gamepad* gamepad) { gamepad_ = gamepad; }
+    void setInputQueue(ThreadSafeQueue<DS4_REPORT>* queue) { input_queue_ = queue; }
+    
+private:
+    void run();
+    
+    std::thread thread_;
+    std::atomic<bool> stop_flag_{false};
+    std::atomic<bool> running_{false};
+    
+    Ds4Gamepad* gamepad_ = nullptr;
+    ThreadSafeQueue<DS4_REPORT>* input_queue_ = nullptr;
+};
+```
+
+- [ ] **Step 2: Write vigem_output_thread.cpp**
+
+```cpp
+// sunone_aimbot_2/controller/vigem_output_thread.cpp
+#include "sunone_aimbot_2/controller/vigem_output_thread.h"
+#include <iostream>
+#include <chrono>
+
+VigemOutputThread::VigemOutputThread() = default;
+
+VigemOutputThread::~VigemOutputThread() {
+    stop();
+}
+
+void VigemOutputThread::start() {
+    if (running_.load()) {
+        return;
+    }
+    
+    stop_flag_.store(false);
+    thread_ = std::thread(&VigemOutputThread::run, this);
+}
+
+void VigemOutputThread::stop() {
+    stop_flag_.store(true);
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
+
+void VigemOutputThread::run() {
+    running_.store(true);
+    std::cout << "[Controller] ViGEm output thread started" << std::endl;
+    
+    while (!stop_flag_.load()) {
+        DS4_REPORT report;
+        
+        // Read from input queue with timeout (16ms = ~60Hz)
+        if (input_queue_ && input_queue_->pop_timeout(report, std::chrono::milliseconds(16))) {
+            if (gamepad_ && gamepad_->isConnected()) {
+                gamepad_->update(report);
+            }
+        }
+    }
+    
+    running_.store(false);
+    std::cout << "[Controller] ViGEm output thread stopped" << std::endl;
+}
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add sunone_aimbot_2/controller/vigem_output_thread.h sunone_aimbot_2/controller/vigem_output_thread.cpp
+git commit -m "feat(controller): add ViGEm output thread (critical for virtual controller)"
+```
+
+---
+
 ## Chunk 5: Controller Manager
 
 ### Task 11: Controller Manager Header
@@ -1132,16 +1409,19 @@ git commit -m "feat(controller): implement ControllerBridge with aimbot injectio
 
 #include <memory>
 #include <mutex>
-#include "controller_state.h"
-#include "hid_input_thread.h"
-#include "controller_bridge.h"
-#include "ds4_gamepad.h"
-#include "thread_safe_queue.h"
+#include "sunone_aimbot_2/controller/controller_state.h"
+#include "sunone_aimbot_2/controller/controller_config.h"
+#include "sunone_aimbot_2/controller/hid_input_thread.h"
+#include "sunone_aimbot_2/controller/controller_bridge.h"
+#include "sunone_aimbot_2/controller/vigem_output_thread.h"
+#include "sunone_aimbot_2/controller/ds4_gamepad.h"
+#include "sunone_aimbot_2/controller/thread_safe_queue.h"
 
 enum class ControllerError {
     None,
     ViGEmDriverNotInstalled,
     ViGEmClientDllNotFound,
+    HidInitFailed,
     HidDeviceNotFound,
     HidDeviceDisconnected,
     HidOpenFailed,
@@ -1154,6 +1434,7 @@ inline const char* controllerErrorToString(ControllerError error) {
         case ControllerError::None: return "No error";
         case ControllerError::ViGEmDriverNotInstalled: return "ViGEmBus driver not installed";
         case ControllerError::ViGEmClientDllNotFound: return "ViGEmClient.dll not found";
+        case ControllerError::HidInitFailed: return "hid_init() failed";
         case ControllerError::HidDeviceNotFound: return "DualSense not found";
         case ControllerError::HidDeviceDisconnected: return "DualSense disconnected";
         case ControllerError::HidOpenFailed: return "Failed to open HID device";
@@ -1163,20 +1444,10 @@ inline const char* controllerErrorToString(ControllerError error) {
     }
 }
 
-struct ControllerConfig {
-    bool enabled = false;
-    bool auto_connect = true;
-    int polling_rate_hz = 1000;
-    bool enable_aimbot_injection = true;
-    bool show_overlay = true;
-    bool invert_left_stick_y = false;
-    bool invert_right_stick_y = false;
-    float aimbot_sensitivity = 1.0f;
-};
-
 class ControllerManager {
 public:
     // Thread-safe singleton access (Meyers' pattern)
+    // C++11 guarantees this is thread-safe on first invocation
     static ControllerManager& instance() {
         static ControllerManager instance;
         return instance;
@@ -1208,6 +1479,7 @@ private:
     
     std::unique_ptr<HidInputThread> hid_thread_;
     std::unique_ptr<ControllerBridge> bridge_;
+    std::unique_ptr<VigemOutputThread> vigem_thread_;
     std::unique_ptr<Ds4Gamepad> gamepad_;
     
     ThreadSafeQueue<ControllerState> hid_to_bridge_queue_{256};
@@ -1226,7 +1498,7 @@ private:
 
 ```bash
 git add sunone_aimbot_2/controller/controller_manager.h
-git commit -m "feat(controller): add ControllerManager header with singleton pattern"
+git commit -m "feat(controller): add ControllerManager header with ViGEm output thread"
 ```
 
 ---
@@ -1240,8 +1512,9 @@ git commit -m "feat(controller): add ControllerManager header with singleton pat
 
 ```cpp
 // sunone_aimbot_2/controller/controller_manager.cpp
-#include "controller_manager.h"
+#include "sunone_aimbot_2/controller/controller_manager.h"
 #include <iostream>
+#include <hidapi.h>
 
 bool ControllerManager::initialize(const ControllerConfig& config) {
     if (initialized_.load()) {
@@ -1256,12 +1529,21 @@ bool ControllerManager::initialize(const ControllerConfig& config) {
     
     std::cout << "[Controller] Initializing..." << std::endl;
     
+    // Initialize hidapi library (REQUIRED before any hid_* calls)
+    int hid_init_result = hid_init();
+    if (hid_init_result != 0) {
+        last_error_ = ControllerError::HidInitFailed;
+        std::cerr << "[Controller] hid_init() failed with code: " << hid_init_result << std::endl;
+        return false;
+    }
+    
     // Initialize ViGEm gamepad
     gamepad_ = std::make_unique<Ds4Gamepad>();
     if (!gamepad_->initialize()) {
         last_error_ = ControllerError::ViGEmDriverNotInstalled;
         std::cerr << "[Controller] Failed to initialize ViGEm: " 
                   << gamepad_->getLastError() << std::endl;
+        hid_exit();  // Cleanup hidapi
         return false;
     }
     
@@ -1269,11 +1551,25 @@ bool ControllerManager::initialize(const ControllerConfig& config) {
     bridge_ = std::make_unique<ControllerBridge>();
     bridge_->setInputQueue(&hid_to_bridge_queue_);
     bridge_->setOutputQueue(&bridge_to_vigem_queue_);
+    bridge_->setConfig(&config_);  // Pass config for deadzone and inversion settings
+    
+    // Set state callback to update current_state_ (thread-safe)
+    bridge_->setStateCallback([this](const ControllerState& state) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        current_state_ = state;
+    });
     
     if (!bridge_->initialize()) {
         last_error_ = ControllerError::BridgeThreadCrashed;
+        gamepad_->shutdown();
+        hid_exit();
         return false;
     }
+    
+    // Create ViGEm output thread
+    vigem_thread_ = std::make_unique<VigemOutputThread>();
+    vigem_thread_->setGamepad(gamepad_.get());
+    vigem_thread_->setInputQueue(&bridge_to_vigem_queue_);
     
     // Create HID thread
     hid_thread_ = std::make_unique<HidInputThread>();
@@ -1293,7 +1589,11 @@ void ControllerManager::shutdown() {
     
     hid_thread_.reset();
     bridge_.reset();
+    vigem_thread_.reset();
     gamepad_.reset();
+    
+    // Cleanup hidapi library
+    hid_exit();
     
     initialized_.store(false);
     std::cout << "[Controller] Shutdown complete" << std::endl;
@@ -1306,6 +1606,7 @@ void ControllerManager::start() {
     
     if (hid_thread_) hid_thread_->start();
     if (bridge_) bridge_->start();
+    if (vigem_thread_) vigem_thread_->start();
     
     running_.store(true);
     std::cout << "[Controller] Started" << std::endl;
@@ -1318,6 +1619,7 @@ void ControllerManager::stop() {
     
     if (hid_thread_) hid_thread_->stop();
     if (bridge_) bridge_->stop();
+    if (vigem_thread_) vigem_thread_->stop();
     
     running_.store(false);
     std::cout << "[Controller] Stopped" << std::endl;
@@ -1338,9 +1640,21 @@ ControllerError ControllerManager::getLastError() const {
 }
 
 void ControllerManager::injectAimInput(float delta_x, float delta_y) {
-    if (bridge_ && config_.enable_aimbot_injection) {
-        bridge_->injectAimInput(delta_x * config_.aimbot_sensitivity, 
-                                delta_y * config_.aimbot_sensitivity);
+    if (!bridge_) {
+        return;
+    }
+    
+    // Read config values under lock to avoid race with updateConfig()
+    float sensitivity = 1.0f;
+    bool enabled = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        enabled = config_.enable_aimbot_injection;
+        sensitivity = config_.aimbot_sensitivity;
+    }
+    
+    if (enabled) {
+        bridge_->injectAimInput(delta_x * sensitivity, delta_y * sensitivity);
     }
 }
 
@@ -1360,7 +1674,7 @@ void ControllerManager::updateConfig(const ControllerConfig& config) {
 
 ```bash
 git add sunone_aimbot_2/controller/controller_manager.cpp
-git commit -m "feat(controller): implement ControllerManager lifecycle and aimbot integration"
+git commit -m "feat(controller): implement ControllerManager with hid_init/hid_exit lifecycle"
 ```
 
 ---
@@ -1377,11 +1691,13 @@ git commit -m "feat(controller): implement ControllerManager lifecycle and aimbo
 ```cpp
 // tests/controller_unit_tests.cpp
 #include <gtest/gtest.h>
-#include "../sunone_aimbot_2/controller/controller_state.h"
-#include "../sunone_aimbot_2/controller/ds4_button_encoding.h"
-#include "../sunone_aimbot_2/controller/axis_conversion.h"
-#include "../sunone_aimbot_2/controller/ds4_gamepad.h"
-#include "../sunone_aimbot_2/controller/thread_safe_queue.h"
+#include <cmath>
+#include <limits>
+#include "sunone_aimbot_2/controller/controller_state.h"
+#include "sunone_aimbot_2/controller/ds4_button_encoding.h"
+#include "sunone_aimbot_2/controller/axis_conversion.h"
+#include "sunone_aimbot_2/controller/ds4_gamepad.h"
+#include "sunone_aimbot_2/controller/thread_safe_queue.h"
 
 // Test axis conversion
 TEST(AxisConversion, CenterPosition) {
@@ -1522,54 +1838,83 @@ Find the Config struct and add the controller member:
 
 ```cpp
 // In sunone_aimbot_2/config/config.h
-// Add this include at the top:
-#include "../controller/controller_manager.h"
+// Add this include at the top (with other includes):
+#include "sunone_aimbot_2/controller/controller_config.h"
 
 // Add this member to the Config struct (after existing members):
     ControllerConfig controller;
 ```
 
-- [ ] **Step 2: Add JSON parsing for controller config in config.cpp**
+- [ ] **Step 2: Add default values for controller in loadConfig() default section**
 
-Find where other config values are parsed and add:
+Find where other default config values are set (around line 100-300) and add:
 
 ```cpp
 // In sunone_aimbot_2/config/config.cpp
-// Add in parseConfig() function:
+// Add in the default config initialization section (after other defaults):
 
-    // Controller config
-    if (json.contains("controller")) {
-        auto& ctrl = json["controller"];
-        controller.enabled = ctrl.value("enabled", false);
-        controller.auto_connect = ctrl.value("auto_connect", true);
-        controller.polling_rate_hz = ctrl.value("polling_rate_hz", 1000);
-        controller.enable_aimbot_injection = ctrl.value("enable_aimbot_injection", true);
-        controller.show_overlay = ctrl.value("show_overlay", true);
-        controller.invert_left_stick_y = ctrl.value("invert_left_stick_y", false);
-        controller.invert_right_stick_y = ctrl.value("invert_right_stick_y", false);
-        controller.aimbot_sensitivity = ctrl.value("aimbot_sensitivity", 1.0f);
-    }
-
-// Add in saveConfig() function:
-
-    // Controller config
-    json["controller"] = {
-        {"enabled", controller.enabled},
-        {"auto_connect", controller.auto_connect},
-        {"polling_rate_hz", controller.polling_rate_hz},
-        {"enable_aimbot_injection", controller.enable_aimbot_injection},
-        {"show_overlay", controller.show_overlay},
-        {"invert_left_stick_y", controller.invert_left_stick_y},
-        {"invert_right_stick_y", controller.invert_right_stick_y},
-        {"aimbot_sensitivity", controller.aimbot_sensitivity}
-    };
+        // Controller
+        controller.enabled = false;
+        controller.auto_connect = true;
+        controller.polling_rate_hz = 1000;
+        controller.enable_aimbot_injection = true;
+        controller.show_overlay = true;
+        controller.invert_left_stick_y = false;
+        controller.invert_right_stick_y = false;
+        controller.aimbot_sensitivity = 1.0f;
+        controller.left_stick_deadzone = 0.05f;
+        controller.right_stick_deadzone = 0.05f;
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Add INI loading for controller config**
+
+Find where other config values are loaded (after the lambdas) and add:
+
+```cpp
+// In sunone_aimbot_2/config/config.cpp
+// Add in loadConfig() function after other config loading:
+
+    // Controller config
+    controller.enabled = get_bool("controller_enabled", controller.enabled);
+    controller.auto_connect = get_bool("controller_auto_connect", controller.auto_connect);
+    controller.polling_rate_hz = get_long("controller_polling_rate_hz", controller.polling_rate_hz);
+    controller.enable_aimbot_injection = get_bool("controller_enable_aimbot_injection", controller.enable_aimbot_injection);
+    controller.show_overlay = get_bool("controller_show_overlay", controller.show_overlay);
+    controller.invert_left_stick_y = get_bool("controller_invert_left_stick_y", controller.invert_left_stick_y);
+    controller.invert_right_stick_y = get_bool("controller_invert_right_stick_y", controller.invert_right_stick_y);
+    controller.aimbot_sensitivity = static_cast<float>(get_double("controller_aimbot_sensitivity", controller.aimbot_sensitivity));
+    controller.left_stick_deadzone = static_cast<float>(get_double("controller_left_stick_deadzone", controller.left_stick_deadzone));
+    controller.right_stick_deadzone = static_cast<float>(get_double("controller_right_stick_deadzone", controller.right_stick_deadzone));
+```
+
+- [ ] **Step 4: Add INI saving for controller config**
+
+Find where other config values are saved in saveConfig() and add:
+
+```cpp
+// In sunone_aimbot_2/config/config.cpp
+// Add in saveConfig() function after other config saving:
+
+    // Controller
+    file << "# Controller\n"
+         << "controller_enabled = " << (controller.enabled ? "true" : "false") << "\n"
+         << "controller_auto_connect = " << (controller.auto_connect ? "true" : "false") << "\n"
+         << "controller_polling_rate_hz = " << controller.polling_rate_hz << "\n"
+         << "controller_enable_aimbot_injection = " << (controller.enable_aimbot_injection ? "true" : "false") << "\n"
+         << "controller_show_overlay = " << (controller.show_overlay ? "true" : "false") << "\n"
+         << "controller_invert_left_stick_y = " << (controller.invert_left_stick_y ? "true" : "false") << "\n"
+         << "controller_invert_right_stick_y = " << (controller.invert_right_stick_y ? "true" : "false") << "\n"
+         << std::fixed << std::setprecision(2)
+         << "controller_aimbot_sensitivity = " << controller.aimbot_sensitivity << "\n"
+         << "controller_left_stick_deadzone = " << controller.left_stick_deadzone << "\n"
+         << "controller_right_stick_deadzone = " << controller.right_stick_deadzone << "\n\n";
+```
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add sunone_aimbot_2/config/config.h sunone_aimbot_2/config/config.cpp
-git commit -m "feat(config): add ControllerConfig parsing and serialization"
+git commit -m "feat(config): add ControllerConfig INI parsing (SimpleIni)"
 ```
 
 ---
@@ -1587,7 +1932,7 @@ git commit -m "feat(config): add ControllerConfig parsing and serialization"
 ```cpp
 // In sunone_aimbot_2/sunone_aimbot_2.h
 // Add this include:
-#include "controller/controller_manager.h"
+#include "sunone_aimbot_2/controller/controller_manager.h"
 ```
 
 - [ ] **Step 2: Initialize controller in sunone_aimbot_2.cpp**
@@ -1630,7 +1975,7 @@ Find where aimbot calculates movement and add controller injection:
 ```cpp
 // In sunone_aimbot_2/mouse/mouse.cpp
 // Add at the top:
-#include "../controller/controller_manager.h"
+#include "sunone_aimbot_2/controller/controller_manager.h"
 
 // Find where mouse movement is calculated (in moveMousePivot or similar)
 // Add after calculating dx, dy:
@@ -1638,9 +1983,9 @@ Find where aimbot calculates movement and add controller injection:
     // Inject into controller if enabled
     if (config.controller.enabled && config.controller.enable_aimbot_injection) {
         // Convert pixel delta to normalized stick values
-        // This is approximate - adjust based on your game's sensitivity
-        float stick_x = dx / 100.0f;  // Adjust divisor for sensitivity
-        float stick_y = dy / 100.0f;
+        // Use the configured sensitivity from config
+        float stick_x = dx / 100.0f * config.controller.aimbot_sensitivity;
+        float stick_y = dy / 100.0f * config.controller.aimbot_sensitivity;
         
         ControllerManager::instance().injectAimInput(stick_x, stick_y);
     }
@@ -1680,6 +2025,7 @@ Find the `AIMBOT_SOURCES` section and add:
     "${SRC_DIR}/controller/hid_input_thread.cpp"
     "${SRC_DIR}/controller/controller_bridge.cpp"
     "${SRC_DIR}/controller/controller_manager.cpp"
+    "${SRC_DIR}/controller/vigem_output_thread.cpp"
 ```
 
 - [ ] **Step 2: Add hidapi and ViGEm to CMakeLists.txt**
@@ -1747,6 +2093,7 @@ endif()
 add_executable(controller_unit_tests
     "${CMAKE_SOURCE_DIR}/tests/controller_unit_tests.cpp"
     "${SRC_DIR}/controller/controller_state.h"
+    "${SRC_DIR}/controller/controller_config.h"
     "${SRC_DIR}/controller/ds4_button_encoding.h"
     "${SRC_DIR}/controller/axis_conversion.h"
     "${SRC_DIR}/controller/ds4_gamepad.h"
@@ -1801,8 +2148,8 @@ git commit -m "build(cmake): add controller sources and dependencies"
 ```cpp
 // sunone_aimbot_2/overlay/draw_controller.cpp
 #include "overlay.h"
-#include "../controller/controller_manager.h"
-#include "../config/config.h"
+#include "sunone_aimbot_2/controller/controller_manager.h"
+#include "sunone_aimbot_2/config/config.h"
 #include "imgui.h"
 
 void drawControllerStatus() {
@@ -1874,6 +2221,10 @@ void drawControllerSettings() {
         ImGui::Checkbox("Invert Right Stick Y", &config.controller.invert_right_stick_y);
         ImGui::SliderFloat("Aimbot Sensitivity", 
             &config.controller.aimbot_sensitivity, 0.1f, 3.0f);
+        ImGui::SliderFloat("Left Stick Deadzone", 
+            &config.controller.left_stick_deadzone, 0.0f, 0.3f);
+        ImGui::SliderFloat("Right Stick Deadzone", 
+            &config.controller.right_stick_deadzone, 0.0f, 0.3f);
     }
 }
 ```
@@ -1947,16 +2298,36 @@ git commit -m "feat: complete ViGEmBus controller integration"
 
 | Chunk | Tasks | Files Created | Files Modified |
 |-------|-------|---------------|----------------|
-| 1 | 5 | 5 headers | 0 |
+| 1 | 6 | 6 headers | 0 |
 | 2 | 1 | 1 cpp | 0 |
 | 3 | 2 | 1 h, 1 cpp | 0 |
 | 4 | 2 | 1 h, 1 cpp | 0 |
+| 4b | 1 | 1 h, 1 cpp | 0 |
 | 5 | 2 | 1 h, 1 cpp | 0 |
 | 6 | 1 | 1 cpp | 0 |
 | 7 | 1 | 0 | 2 |
 | 8 | 2 | 0 | 3 |
 | 9 | 1 | 0 | 1 |
 | 10 | 1 | 1 cpp | 1 |
-| **Total** | **18** | **14 files** | **7 files** |
+| **Total** | **19** | **17 files** | **7 files** |
+
+**Key Fixes from Review:**
+1. ✅ Added ViGEm Output Thread (critical - was missing)
+2. ✅ Changed config integration to use SimpleIni instead of JSON
+3. ✅ Added hid_init()/hid_exit() lifecycle in ControllerManager
+4. ✅ Added wide string to UTF-8 conversion for serial numbers
+5. ✅ Changed to project-root-relative includes
+6. ✅ Added prerequisites section for library setup
+7. ✅ Fixed ViGEmBus function pointer signature (pointer to DS4_REPORT)
+8. ✅ Changed to std::array for type safety
+9. ✅ Separated ControllerConfig into its own header
+10. ✅ Added deadzone configuration options
+
+**Additional Fixes from v2 Review:**
+11. ✅ Implemented deadzone application in ControllerBridge::applyDeadzone()
+12. ✅ Added state callback to update ControllerManager::current_state_
+13. ✅ Fixed config race condition in injectAimInput() with mutex
+14. ✅ Added stick inversion from config in processState()
+15. ✅ Added missing `<cmath>` include to test file
 
 **Estimated Implementation Time:** 9-14 days (as per spec)
