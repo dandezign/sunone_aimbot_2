@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "envFile": ".env",
   "mcp": {
     "figma": {
       "type": "local",
@@ -10,7 +11,7 @@
         "--stdio"
       ],
       "environment": {
-        "FIGMA_API_KEY": "YOUR_FIGMA_API_KEY_HERE"
+        "FIGMA_API_KEY": "${FIGMA_KEY}"
       },
       "enabled": true,
       "timeout": 15000
