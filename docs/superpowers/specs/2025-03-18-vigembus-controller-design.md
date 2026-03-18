@@ -185,11 +185,79 @@ private:
 };
 ```
 
-**Connection States:**
-- `Searching`: Looking for DualSense
-- `Connected`: Device open and polling
-- `Disconnected`: Was connected but lost
-- `Error`: Failed to open (permissions, etc.)
+**HID Report Parsing Error Handling:**
+
+The `parseHidReport()` function validates input reports and handles the following error conditions:
+
+| Error Condition | Detection | Handling |
+|-----------------|-----------|----------|
+| **Wrong Report ID** | Report[0] != expected_id (0x01) | Return nullopt, log debug message |
+| **Insufficient Length** | report.size() < 64 bytes | Return nullopt, log warning |
+| **hid_read() failure** | Returns -1 (error) or 0 (timeout) | Log error, return nullopt, trigger reconnect |
+| **Partial Read** | bytes_read > 0 but < expected | Log warning, attempt to parse anyway |
+| **Checksum Mismatch** | Report CRC invalid | Log warning, parse anyway (may be garbage) |
+| **Out-of-Range Values** | Stick values > 255 or < 0 | Clamp to valid range |
+
+**Error Recovery Flow:**
+```cpp
+std::optional<ControllerState> parseHidReport(const std::vector<uint8_t>& report) {
+    // Check minimum size
+    if (report.size() < 64) {
+        std::cerr << "[HID] Report too small: " << report.size() << " bytes" << std::endl;
+        return std::nullopt;
+    }
+    
+    // Check report ID (DualSense uses 0x01 for standard input)
+    if (report[0] != 0x01) {
+        // Wrong report type - skip silently (common for feature reports)
+        return std::nullopt;
+    }
+    
+    // Parse stick values with bounds checking
+    ControllerState state;
+    uint8_t lx = report[1];
+    uint8_t ly = report[2];
+    
+    // Validate values are in valid byte range (implicitly true for uint8_t)
+    // Convert to normalized float
+    state.left_stick.x = u8_to_stick(lx);
+    state.left_stick.y = u8_to_stick(ly);
+    
+    // ... parse rest of report
+    
+    return state;
+}
+```
+
+**Poll Loop Error Handling:**
+```cpp
+bool HidInputThread::pollDevice(hid_device* device) {
+    std::vector<uint8_t> report(64);
+    int bytes_read = hid_read(device, report.data(), report.size());
+    
+    if (bytes_read < 0) {
+        // Fatal HID error
+        std::cerr << "[HID] Read error: " << bytes_read << std::endl;
+        return false;  // Trigger reconnect
+    }
+    
+    if (bytes_read == 0) {
+        // Timeout - no data available
+        return true;  // Continue polling
+    }
+    
+    // Resize to actual bytes read
+    report.resize(bytes_read);
+    
+    auto state = parseHidReport(report);
+    if (state) {
+        output_queue_->push(*state);
+    }
+    // If nullopt, continue (parser rejected invalid report)
+    
+    return true;
+}
+```
 
 ---
 
@@ -575,6 +643,34 @@ private:
 };
 ```
 
+**Thread-Safe Singleton Implementation (Meyers' Pattern):**
+
+```cpp
+// controller/controller_manager.cpp
+
+ControllerManager& ControllerManager::instance() {
+    // C++11 guarantees thread-safe initialization of static locals
+    // No explicit locking needed - compiler generates thread-safe code
+    static ControllerManager instance;
+    return instance;
+}
+```
+
+**Why Meyers' Singleton:**
+- Thread-safe by default in C++11 and later
+- Lazy initialization (created on first call)
+- No dynamic allocation overhead
+- Works correctly across translation units
+- No need for double-checked locking or explicit mutex
+
+**Thread Safety Guarantees:**
+- `instance()`: Thread-safe (C++11 static initialization)
+- `initialize()`, `shutdown()`: Not thread-safe with each other (call from main thread only)
+- `start()`, `stop()`: Not thread-safe with each other (call from main thread only)
+- `isConnected()`, `getCurrentState()`, `getLastError()`: Thread-safe (atomic/mutex protected)
+- `injectAimInput()`, `setAimbotActive()`: Thread-safe (atomic members)
+- `updateConfig()`: Thread-safe (mutex protected)
+
 ---
 
 ## 4. Error Handling
@@ -594,6 +690,22 @@ enum class ControllerError {
     MacroScriptNotFound,            // Script file missing
     MacroScriptParseError           // Invalid script syntax
 };
+
+inline const char* controllerErrorToString(ControllerError error) {
+    switch (error) {
+        case ControllerError::None: return "No error";
+        case ControllerError::ViGEmDriverNotInstalled: return "ViGEmBus driver not installed";
+        case ControllerError::ViGEmClientDllNotFound: return "ViGEmClient.dll not found";
+        case ControllerError::HidDeviceNotFound: return "DualSense not found";
+        case ControllerError::HidDeviceDisconnected: return "DualSense disconnected";
+        case ControllerError::HidOpenFailed: return "Failed to open HID device";
+        case ControllerError::BridgeThreadCrashed: return "Controller bridge crashed";
+        case ControllerError::InvalidButtonMapping: return "Invalid button mapping";
+        case ControllerError::MacroScriptNotFound: return "Macro script not found";
+        case ControllerError::MacroScriptParseError: return "Macro script parse error";
+        default: return "Unknown error";
+    }
+}
 ```
 
 ### 4.2 Error Propagation
@@ -606,13 +718,21 @@ Errors are propagated via:
 
 ### 4.3 Recovery Strategies
 
-| Error | Strategy | Retry Delay |
-|-------|----------|-------------|
-| ViGEmDriverNotInstalled | Log error, disable controller | None (manual fix) |
-| HidDeviceNotFound | Continue polling | 2 seconds |
-| HidDeviceDisconnected | Close, wait, re-enumerate | 750ms |
-| HidOpenFailed | Log error, continue polling | 500ms |
-| BridgeThreadCrashed | Restart bridge thread | Immediate |
+| Error | Strategy | Retry Delay | Max Retries |
+|-------|----------|-------------|-------------|
+| ViGEmDriverNotInstalled | Log error, disable controller | None (manual fix) | 0 |
+| HidDeviceNotFound | Continue polling | 2 seconds | Unlimited |
+| HidDeviceDisconnected | Close, wait, re-enumerate | 750ms | Unlimited |
+| HidOpenFailed | Log error, continue polling | 500ms | Unlimited |
+| BridgeThreadCrashed | Restart bridge thread with backoff | Exponential: 100ms, 200ms, 400ms, max 5s | 10, then disable |
+
+**Bridge Thread Crash Recovery:**
+- First crash: wait 100ms, restart
+- Second crash: wait 200ms, restart
+- Third+ crash: wait 400ms, restart
+- Max wait: 5 seconds
+- After 10 crashes: Log fatal error, disable controller system
+- This prevents CPU spin from persistent errors (null pointer, corrupted state)
 
 ---
 
