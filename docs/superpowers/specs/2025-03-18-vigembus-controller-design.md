@@ -128,7 +128,7 @@ This specification defines the integration of ViGEmBus virtual controller emulat
 | **ViGEm Output** | 60-144Hz | Normal | Sync to game FPS, send to driver |
 | **Aimbot** | Variable | High | Calculate aim, inject into bridge |
 
-**Communication:** Lock-free MPSC queues using `std::atomic` + `std::mutex`
+**Communication:** Thread-safe MPSC queues using `std::mutex` + `std::condition_variable`
 
 ---
 
@@ -175,7 +175,8 @@ private:
     void run();
     std::optional<DeviceInfo> findDualSenseDevice();
     bool pollDevice(hid_device* device);
-    ControllerState parseHidReport(const std::vector<uint8_t>& report);
+    std::optional<ControllerState> parseHidReport(const std::vector<uint8_t>& report);
+    // Returns nullopt if report malformed or checksum invalid
     
     std::thread thread_;
     std::atomic<bool> stop_flag_{false};
@@ -240,19 +241,25 @@ struct ControllerState {
 
 **Location:** `controller/controller_bridge.h`, `.cpp`
 
-**Purpose:** Main processing logic - reads input state, applies aimbot/macros, encodes to DS4 format, outputs to ViGEm queue.
+**Purpose:** Main processing logic - reads input state, applies aimbot injection, encodes to DS4 format, outputs to ViGEm queue.
+
+**Note:** Macro system is NOT included in v1. Will be added in future release.
 
 **Processing Pipeline (per frame):**
 1. Read ControllerState from input queue (blocking with timeout)
 2. If `connected == false`: output neutral DS4_REPORT
 3. If aimbot active: modify right stick based on aim delta
-4. If macros enabled: apply script transformations
-5. Encode ControllerState to DS4_REPORT binary format
-6. Push DS4_REPORT to output queue
+4. Encode ControllerState to DS4_REPORT binary format
+5. Push DS4_REPORT to output queue
 
 **Aimbot Injection:**
 ```cpp
 void injectAimInput(float delta_x, float delta_y) {
+    // Validate inputs - reject NaN or Inf
+    if (!std::isfinite(delta_x) || !std::isfinite(delta_y)) {
+        return;
+    }
+    
     // Convert aim delta to stick position
     // delta_x, delta_y are in normalized screen coordinates
     // Apply to right stick (aim stick)
@@ -298,7 +305,7 @@ public:
 private:
     void run();
     void processState(ControllerState& state);
-    void applyMacros(ControllerState& state);
+    // void applyMacros(ControllerState& state); // NOT in v1
     DS4_REPORT encodeToDs4(const ControllerState& state);
     
     ThreadSafeQueue<ControllerState>* input_queue_ = nullptr;
@@ -313,7 +320,9 @@ private:
     std::atomic<float> aim_delta_y_{0.0f};
     
     std::atomic<bool> macros_enabled_{false};
-    std::unique_ptr<MacroSystem> macro_system_;
+    // Macro system (NOT in v1)
+    // std::atomic<bool> macros_enabled_{false};
+    // std::unique_ptr<MacroSystem> macro_system_;
 };
 ```
 
@@ -340,8 +349,10 @@ struct DS4_REPORT {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(DS4_REPORT) == 9, "DS4_REPORT must be 9 bytes");
+static_assert(sizeof(DS4_REPORT) == 9, "DS4_REPORT must be 9 bytes (packed)");
 ```
+
+**Note:** `#pragma pack(push, 1)` ensures no padding between fields, making the struct exactly 9 bytes to match the ViGEmBus DS4_REPORT format.
 
 **ViGEm Initialization Sequence:**
 1. `vigem_alloc()` - Allocate client
@@ -480,26 +491,34 @@ inline float u8_to_trigger(uint8_t value) {
 
 **Location:** `controller/thread_safe_queue.h`
 
-**Purpose:** Lock-free MPSC queue for inter-thread communication.
+**Purpose:** Thread-safe MPSC queue for inter-thread communication with capacity limits.
 
 **Interface:**
 ```cpp
 template<typename T>
 class ThreadSafeQueue {
 public:
-    void push(T value);
+    explicit ThreadSafeQueue(size_t max_capacity = 256);
+    
+    bool push(T value);  // Returns false if queue full (drops oldest)
     bool try_pop(T& value);
     bool pop_timeout(T& value, std::chrono::milliseconds timeout);
     bool empty() const;
     size_t size() const;
     void clear();
+    size_t capacity() const { return max_capacity_; }
     
 private:
     std::queue<T> queue_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
+    size_t max_capacity_;
+    
+    void drop_oldest_if_full();
 };
 ```
+
+**Overflow Strategy:** When queue reaches capacity, oldest item is dropped (LRU behavior). This prevents memory exhaustion under backpressure while maintaining responsiveness.
 
 ---
 
@@ -513,40 +532,46 @@ private:
 ```cpp
 class ControllerManager {
 public:
+    // Thread-safe singleton access
     static ControllerManager& instance();
     
-    // Lifecycle
+    // Lifecycle (thread-safe)
     bool initialize(const ControllerConfig& config);
     void shutdown();
     void start();
     void stop();
     
-    // Status
+    // Status (thread-safe)
     bool isConnected() const;
     ControllerState getCurrentState() const;
     ControllerError getLastError() const;
     
-    // Aimbot integration
+    // Aimbot integration (thread-safe)
     void injectAimInput(float delta_x, float delta_y);
     void setAimbotActive(bool active);
     
-    // Configuration
+    // Configuration (thread-safe)
     void updateConfig(const ControllerConfig& config);
     
 private:
     ControllerManager() = default;
     ~ControllerManager() = default;
+    ControllerManager(const ControllerManager&) = delete;
+    ControllerManager& operator=(const ControllerManager&) = delete;
     
     std::unique_ptr<HidInputThread> hid_thread_;
     std::unique_ptr<ControllerBridge> bridge_;
     std::unique_ptr<Ds4Gamepad> gamepad_;
     
-    ThreadSafeQueue<ControllerState> hid_to_bridge_queue_;
-    ThreadSafeQueue<DS4_REPORT> bridge_to_vigem_queue_;
+    ThreadSafeQueue<ControllerState> hid_to_bridge_queue_{256};
+    ThreadSafeQueue<DS4_REPORT> bridge_to_vigem_queue_{256};
     
     ControllerConfig config_;
     std::atomic<bool> initialized_{false};
     std::atomic<bool> running_{false};
+    mutable std::mutex state_mutex_;
+    ControllerState current_state_;
+    ControllerError last_error_ = ControllerError::None;
 };
 ```
 
@@ -791,9 +816,16 @@ void DrawControllerSettings() {
 
 ### 8.1 Unit Tests
 
+**Framework:** Google Test (already used in sunone_aimbot_2 tests)
+
 **File:** `tests/controller_unit_tests.cpp`
 
 ```cpp
+#include <gtest/gtest.h>
+#include "controller/ds4_button_encoding.h"
+#include "controller/axis_conversion.h"
+#include "controller/ds4_gamepad.h"
+
 // Test button encoding
 TEST(ButtonEncoding, CrossButton) {
     ControllerState state;
@@ -813,9 +845,29 @@ TEST(AxisConversion, FullRange) {
     EXPECT_EQ(stick_to_u8(1.0f), 0xFF);
 }
 
+// Test NaN/Inf handling
+TEST(AxisConversion, InvalidInputs) {
+    EXPECT_EQ(stick_to_u8(std::numeric_limits<float>::quiet_NaN()), 0x80);
+    EXPECT_EQ(stick_to_u8(std::numeric_limits<float>::infinity()), 0xFF);
+    EXPECT_EQ(stick_to_u8(-std::numeric_limits<float>::infinity()), 0x00);
+}
+
 // Test DS4_REPORT packing
 TEST(Ds4Report, SizeCheck) {
     EXPECT_EQ(sizeof(DS4_REPORT), 9);
+}
+
+// Test queue capacity
+TEST(ThreadSafeQueue, CapacityRespected) {
+    ThreadSafeQueue<int> queue(3);
+    EXPECT_TRUE(queue.push(1));
+    EXPECT_TRUE(queue.push(2));
+    EXPECT_TRUE(queue.push(3));
+    EXPECT_TRUE(queue.push(4)); // Should drop oldest (1)
+    
+    int val;
+    EXPECT_TRUE(queue.try_pop(val));
+    EXPECT_EQ(val, 2); // 1 was dropped
 }
 ```
 
@@ -884,11 +936,9 @@ sunone_aimbot_2/
 │   ├── controller_bridge.cpp
 │   ├── hid_input_thread.h              # HID detection/polling
 │   ├── hid_input_thread.cpp
-│   ├── macro_system.h                  # Optional macros
-│   ├── macro_system.cpp
 │   ├── controller_manager.h            # Top-level manager
 │   ├── controller_manager.cpp
-│   └── thread_safe_queue.h             # Lock-free queue
+│   └── thread_safe_queue.h             # Thread-safe queue
 │
 ├── config/
 │   ├── config.h                        # Modified to add ControllerConfig
@@ -972,25 +1022,7 @@ sunone_aimbot_2/
 
 ---
 
-## 12. Future Extensions
-
-### 12.1 Planned Features
-- [ ] Macro/script system (Python/Lua integration)
-- [ ] Xbox 360 controller output mode
-- [ ] Multiple controller support
-- [ ] Haptic feedback passthrough
-- [ ] Touchpad emulation
-- [ ] Motion sensor (gyro) support
-
-### 12.2 Potential Enhancements
-- Adaptive stick sensitivity curves
-- Button remapping profiles
-- Combo recording/playback
-- Integration with training mode
-
----
-
-## 13. Approval
+## 12. Approval
 
 **Design Status:** ✅ Approved  
 **Date:** 2025-03-18  
@@ -1000,7 +1032,7 @@ sunone_aimbot_2/
 
 ---
 
-## 14. References
+## 13. References
 
 1. **ViGEmBus Documentation:** https://docs.nefarius.at/projects/ViGEm/
 2. **ViGEmClient GitHub:** https://github.com/nefarius/ViGEmClient
