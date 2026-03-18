@@ -50,8 +50,7 @@ SAM3TensorRT/
 │           └── export/
 │               └── yolo_exporter.h
 └── configs/labeler/
-    ├── prompts.yaml
-    └── settings.yaml
+    └── config.yaml        # Combined prompts + settings
 ```
 
 ## Data Flow
@@ -283,27 +282,31 @@ public:
 
 ### UI Panels
 
-Follow UI_DESIGN_SPEC.md exactly.
+Adapt UI_DESIGN_SPEC.md layout (dark theme, colors, spacing) with video labeler-specific content:
 
-**Capture Panel:**
-- Video file browser
-- Capture button (pauses + runs inference)
+**Capture Panel (replaces spec's Capture section):**
+- Video file browser (OpenFileDialog)
+- Video controls: play/pause button, frame step buttons, seek bar
+- Speed selector (0.5x, 1x, 2x)
+- Current frame / total frames display
 
-**Labels Panel:**
-- Prompt list with enable/disable toggles
-- Add/Edit/Remove prompt buttons
-- Prompt editor popup
+**Labels Panel (replaces spec's Labels section):**
+- Prompt list with enable/disable toggles (checkbox per prompt)
+- Add/Edit/Remove prompt buttons below list
+- Prompt editor popup: text input, class dropdown, enable toggle
 
-**Settings Panel:**
+**Settings Panel (replaces spec's Settings section):**
 - Output directory browser
-- Dataset split selector (train/val)
-- Confidence threshold slider
-- IoU threshold slider
+- Dataset split selector (train/val dropdown)
+- Confidence threshold slider (0.1-0.99)
+- IoU threshold slider (0.1-0.95)
+- Image format selector (.jpg/.png)
 
 **Log Console:**
-- Inference status
+- Inference status messages
 - Save confirmations
 - Error messages
+- Collapsible (40px collapsed, 192px expanded)
 
 ## Coordinate System
 
@@ -335,7 +338,16 @@ Follow UI_DESIGN_SPEC.md exactly.
 
 ## Configuration
 
-### prompts.yaml
+### Config File Structure
+
+Single combined config file for simplicity:
+
+```
+configs/labeler/
+└── config.yaml   # Combined prompts + settings
+```
+
+### config.yaml
 
 ```yaml
 prompts:
