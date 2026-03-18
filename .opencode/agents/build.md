@@ -12,14 +12,14 @@ tools:
   list: true
   question: true
   skill: true
-  webfetch: true
+  webfetch: false
   todowrite: true
   task: true
   toolSearch: true
 permission:
   edit: allow
   bash: allow
-  webfetch: allow
+  webfetch: deny
 color: "#22c55e"
 ---
 
