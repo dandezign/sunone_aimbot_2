@@ -1,0 +1,1875 @@
+# SAM3 Video Labeler Implementation Plan
+
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build a standalone ImGui application for generating YOLO-format training data from video files using SAM3 TensorRT inference.
+
+**Architecture:** New standalone app in `SAM3TensorRT/cpp/apps/sam3_labeler/` that reuses existing SAM3 inference code. ImGui for UI, OpenCV for video playback, yaml-cpp for config persistence.
+
+**Tech Stack:** C++17, ImGui, OpenCV, TensorRT, yaml-cpp, fmt
+
+**Spec:** `docs/superpowers/specs/2026-03-18-sam3-video-labeler-design.md`
+
+---
+
+## File Structure
+
+```
+SAM3TensorRT/
+├── cpp/
+│   └── apps/
+│       └── sam3_labeler/
+│           ├── CMakeLists.txt
+│           ├── main.cpp
+│           ├── app/
+│           │   ├── app.h
+│           │   ├── app.cpp
+│           │   └── app_config.h
+│           ├── video/
+│           │   └── video_player.h
+│           ├── inference/
+│           │   ├── sam3_labeler_backend.h
+│           │   └── multi_prompt_runner.h
+│           ├── ui/
+│           │   ├── ui_renderer.h
+│           │   ├── panels/
+│           │   │   ├── capture_panel.h
+│           │   │   ├── labels_panel.h
+│           │   │   ├── settings_panel.h
+│           │   │   └── log_console.h
+│           │   └── canvas/
+│           │       ├── video_canvas.h
+│           │       └── box_editor.h
+│           └── export/
+│               └── yolo_exporter.h
+└── configs/labeler/
+    └── config.yaml
+```
+
+---
+
+## Chunk 1: Project Setup and Core Infrastructure
+
+### Task 1.1: Create CMakeLists.txt for Labeler App
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/CMakeLists.txt`
+
+- [ ] **Step 1: Create CMakeLists.txt**
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(sam3_labeler LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find dependencies
+find_package(OpenCV REQUIRED)
+find_package(CUDA REQUIRED)
+find_package(yaml-cpp REQUIRED)
+
+# ImGui sources (relative to SAM3TensorRT root)
+set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/imgui")
+set(IMGUI_SOURCES
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_demo.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
+)
+
+# Labeler sources
+set(LABELER_SOURCES
+    main.cpp
+    app/app.cpp
+    video/video_player.h
+    inference/sam3_labeler_backend.h
+    inference/multi_prompt_runner.h
+    ui/ui_renderer.h
+    ui/panels/capture_panel.h
+    ui/panels/labels_panel.h
+    ui/panels/settings_panel.h
+    ui/panels/log_console.h
+    ui/canvas/video_canvas.h
+    ui/canvas/box_editor.h
+    export/yolo_exporter.h
+)
+
+add_executable(sam3_labeler ${LABELER_SOURCES} ${IMGUI_SOURCES})
+
+target_include_directories(sam3_labeler PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/imgui
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(sam3_labeler PRIVATE
+    sam3_trt
+    ${OpenCV_LIBS}
+    yaml-cpp
+    glfw
+    OpenGL::GL
+    cuda
+)
+
+# Copy config to build directory
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../configs/labeler/config.yaml"
+    "${CMAKE_CURRENT_BINARY_DIR}/config.yaml"
+    COPYONLY
+)
+```
+
+- [ ] **Step 2: Update parent CMakeLists.txt**
+
+Modify: `SAM3TensorRT/cpp/CMakeLists.txt` (add at end):
+
+```cmake
+add_subdirectory(apps/sam3_labeler)
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/CMakeLists.txt SAM3TensorRT/cpp/CMakeLists.txt
+git commit -m "feat(labeler): add CMakeLists.txt for sam3_labeler app"
+```
+
+---
+
+### Task 1.2: Create App Config Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/app/app_config.h`
+
+- [ ] **Step 1: Create app_config.h**
+
+```cpp
+#pragma once
+
+#include <string>
+#include <vector>
+#include <yaml-cpp/yaml.h>
+
+namespace sam3_labeler {
+
+struct PromptConfig {
+    std::string text;
+    int class_id = 0;
+    std::string class_name;
+    bool enabled = true;
+};
+
+struct Settings {
+    std::string sam3_engine_path = "models/sam3_fp16.engine";
+    std::string output_dir = "scripts/training/datasets/game/";
+    std::string split = "train";
+    std::string image_format = ".jpg";
+    float confidence_threshold = 0.45f;
+    float iou_threshold = 0.35f;
+};
+
+struct AppConfig {
+    std::vector<PromptConfig> prompts;
+    Settings settings;
+    
+    static AppConfig load(const std::string& path);
+    bool save(const std::string& path) const;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/app_config.h
+git commit -m "feat(labeler): add AppConfig struct for YAML config"
+```
+
+---
+
+### Task 1.3: Create Main Entry Point
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/main.cpp`
+
+- [ ] **Step 1: Create main.cpp**
+
+```cpp
+#include "app/app.h"
+#include <iostream>
+
+int main(int argc, char* argv[]) {
+    try {
+        sam3_labeler::App app;
+        
+        if (!app.init()) {
+            std::cerr << "Failed to initialize application" << std::endl;
+            return 1;
+        }
+        
+        app.run();
+        return 0;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/main.cpp
+git commit -m "feat(labeler): add main entry point"
+```
+
+---
+
+### Task 1.4: Create App Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/app/app.h`
+
+- [ ] **Step 1: Create app.h**
+
+```cpp
+#pragma once
+
+#include "app_config.h"
+#include "video/video_player.h"
+#include <GLFW/glfw3.h>
+#include <memory>
+#include <functional>
+
+namespace sam3_labeler {
+
+class App {
+public:
+    App();
+    ~App();
+    
+    bool init();
+    void run();
+    
+    // Accessors for UI panels
+    AppConfig& config() { return config_; }
+    VideoPlayer& video_player() { return video_player_; }
+    
+    // Log callback
+    using LogCallback = std::function<void(const std::string& level, const std::string& message)>;
+    void set_log_callback(LogCallback callback) { log_callback_ = callback; }
+    void log(const std::string& level, const std::string& message);
+    
+private:
+    bool init_glfw();
+    bool init_imgui();
+    void shutdown();
+    
+    void render_frame();
+    void render_ui();
+    
+    // Window
+    GLFWwindow* window_ = nullptr;
+    int window_width_ = 1014;
+    int window_height_ = 730;
+    
+    // Config
+    AppConfig config_;
+    std::string config_path_ = "config.yaml";
+    
+    // Components
+    VideoPlayer video_player_;
+    
+    // Callbacks
+    LogCallback log_callback_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/app.h
+git commit -m "feat(labeler): add App class header"
+```
+
+---
+
+### Task 1.5: Create VideoPlayer Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/video/video_player.h`
+
+- [ ] **Step 1: Create video_player.h**
+
+```cpp
+#pragma once
+
+#include <opencv2/opencv.hpp>
+#include <string>
+
+namespace sam3_labeler {
+
+class VideoPlayer {
+public:
+    VideoPlayer() = default;
+    ~VideoPlayer();
+    
+    // File operations
+    bool load(const std::string& path);
+    void close();
+    
+    // Playback control
+    void play();
+    void pause();
+    void step_forward();
+    void step_backward();
+    void seek(int frame_number);
+    
+    // Frame access
+    bool get_frame(cv::Mat& frame);
+    bool is_playing() const { return playing_; }
+    
+    // Properties
+    int current_frame() const { return current_frame_; }
+    int total_frames() const { return total_frames_; }
+    double fps() const { return fps_; }
+    bool is_loaded() const { return loaded_; }
+    std::string last_error() const { return last_error_; }
+    std::string filename() const { return filename_; }
+    
+    // Speed control
+    void set_speed(double speed) { playback_speed_ = speed; }
+    double speed() const { return playback_speed_; }
+    
+private:
+    cv::VideoCapture capture_;
+    bool loaded_ = false;
+    bool playing_ = false;
+    int current_frame_ = 0;
+    int total_frames_ = 0;
+    double fps_ = 30.0;
+    double playback_speed_ = 1.0;
+    std::string filename_;
+    std::string last_error_;
+    
+    // Timing for playback
+    int64_t last_frame_time_ = 0;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/video/video_player.h
+git commit -m "feat(labeler): add VideoPlayer header with OpenCV wrapper"
+```
+
+---
+
+### Task 1.6: Implement App Class
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/app/app.cpp`
+
+- [ ] **Step 1: Create app.cpp with GLFW/ImGui init**
+
+```cpp
+#include "app.h"
+#include "ui/ui_renderer.h"
+
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+#include <iostream>
+
+namespace sam3_labeler {
+
+App::App() = default;
+
+App::~App() {
+    shutdown();
+}
+
+bool App::init() {
+    // Load config
+    try {
+        config_ = AppConfig::load(config_path_);
+    } catch (const std::exception& e) {
+        log("WARNING", std::string("Failed to load config: ") + e.what());
+    }
+    
+    if (!init_glfw()) {
+        return false;
+    }
+    
+    if (!init_imgui()) {
+        return false;
+    }
+    
+    log("INFO", "Application initialized");
+    return true;
+}
+
+bool App::init_glfw() {
+    if (!glfwInit()) {
+        log("ERROR", "Failed to initialize GLFW");
+        return false;
+    }
+    
+    // GL 3.3 + GLSL 330
+    const char* glsl_version = "#version 330";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    
+    window_ = glfwCreateWindow(window_width_, window_height_, 
+                               "SAM3 Video Labeler", nullptr, nullptr);
+    if (!window_) {
+        log("ERROR", "Failed to create GLFW window");
+        glfwTerminate();
+        return false;
+    }
+    
+    glfwMakeContextCurrent(window_);
+    glfwSwapInterval(1);  // Enable vsync
+    
+    return true;
+}
+
+bool App::init_imgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Dark theme matching UI_DESIGN_SPEC.md
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    
+    // Colors from spec
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = ImVec4(0.035f, 0.035f, 0.043f, 1.0f);         // #09090b
+    colors[ImGuiCol_ChildBg] = ImVec4(0.094f, 0.094f, 0.106f, 1.0f);         // #18181b
+    colors[ImGuiCol_Header] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);          // #27272a
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);
+    colors[ImGuiCol_Button] = ImVec4(0.094f, 0.094f, 0.106f, 1.0f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.035f, 0.035f, 0.043f, 1.0f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.0f, 0.737f, 0.490f, 1.0f);          // #00bc7d
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.0f, 0.737f, 0.490f, 1.0f);
+    colors[ImGuiCol_Text] = ImVec4(0.957f, 0.957f, 0.961f, 1.0f);             // #f4f4f5
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.620f, 0.620f, 0.667f, 1.0f);    // #9f9fa9
+    colors[ImGuiCol_Border] = ImVec4(0.153f, 0.153f, 0.165f, 1.0f);
+    
+    style.WindowRounding = 8.0f;
+    style.FrameRounding = 4.0f;
+    style.GrabRounding = 8.0f;
+    
+    if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
+        log("ERROR", "Failed to init ImGui GLFW backend");
+        return false;
+    }
+    
+    if (!ImGui_ImplOpenGL3_Init("#version 330")) {
+        log("ERROR", "Failed to init ImGui OpenGL backend");
+        return false;
+    }
+    
+    return true;
+}
+
+void App::run() {
+    while (!glfwWindowShouldClose(window_)) {
+        glfwPollEvents();
+        
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        
+        render_ui();
+        
+        ImGui::Render();
+        
+        int display_w, display_h;
+        glfwGetFramebufferSize(window_, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(0.035f, 0.035f, 0.043f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        
+        glfwSwapBuffers(window_);
+    }
+}
+
+void App::render_ui() {
+    // Main window - full viewport
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(window_width_, window_height_));
+    ImGui::Begin("Main", nullptr, 
+                 ImGuiWindowFlags_NoTitleBar | 
+                 ImGuiWindowFlags_NoResize | 
+                 ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoCollapse);
+    
+    // Three-panel layout from spec
+    // Left panel: 256px
+    // Right: Canvas area
+    // Bottom: Log console (192px expanded, 40px collapsed)
+    
+    // Placeholder for now
+    ImGui::Text("SAM3 Video Labeler");
+    ImGui::Text("Config loaded: %zu prompts", config_.prompts.size());
+    
+    ImGui::End();
+}
+
+void App::shutdown() {
+    // Save config
+    try {
+        config_.save(config_path_);
+    } catch (...) {}
+    
+    if (window_) {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        
+        glfwDestroyWindow(window_);
+        glfwTerminate();
+        window_ = nullptr;
+    }
+}
+
+void App::log(const std::string& level, const std::string& message) {
+    if (log_callback_) {
+        log_callback_(level, message);
+    }
+    std::cout << "[" << level << "] " << message << std::endl;
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/app.cpp
+git commit -m "feat(labeler): implement App class with GLFW/ImGui init and dark theme"
+```
+
+---
+
+### Task 1.7: Create Config File
+
+**Files:**
+- Create: `SAM3TensorRT/configs/labeler/config.yaml`
+
+- [ ] **Step 1: Create config.yaml**
+
+```yaml
+prompts:
+  - text: "enemy character"
+    class_id: 0
+    class_name: "player"
+    enabled: true
+    
+  - text: "enemy character nametag"
+    class_id: 7
+    class_name: "head"
+    enabled: true
+
+settings:
+  sam3_engine_path: "models/sam3_fp16.engine"
+  output_dir: "scripts/training/datasets/game/"
+  split: "train"
+  image_format: ".jpg"
+  confidence_threshold: 0.45
+  iou_threshold: 0.35
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/configs/labeler/config.yaml
+git commit -m "feat(labeler): add default config.yaml"
+```
+
+---
+
+### Task 1.8: Implement AppConfig YAML Serialization
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/app/app_config.h`
+
+- [ ] **Step 1: Add YAML serialization to app_config.h**
+
+Append after the struct definitions:
+
+```cpp
+// YAML conversion for PromptConfig
+inline YAML::Emitter& operator<<(YAML::Emitter& out, const PromptConfig& p) {
+    out << YAML::BeginMap;
+    out << YAML::Key << "text" << YAML::Value << p.text;
+    out << YAML::Key << "class_id" << YAML::Value << p.class_id;
+    out << YAML::Key << "class_name" << YAML::Value << p.class_name;
+    out << YAML::Key << "enabled" << YAML::Value << p.enabled;
+    out << YAML::EndMap;
+    return out;
+}
+
+// Implementation of AppConfig methods
+inline AppConfig AppConfig::load(const std::string& path) {
+    AppConfig config;
+    YAML::Node node = YAML::LoadFile(path);
+    
+    if (node["prompts"]) {
+        for (const auto& p : node["prompts"]) {
+            PromptConfig pc;
+            pc.text = p["text"].as<std::string>();
+            pc.class_id = p["class_id"].as<int>();
+            pc.class_name = p["class_name"].as<std::string>();
+            pc.enabled = p["enabled"].as<bool>(true);
+            config.prompts.push_back(pc);
+        }
+    }
+    
+    if (node["settings"]) {
+        auto& s = node["settings"];
+        config.settings.sam3_engine_path = s["sam3_engine_path"].as<std::string>("models/sam3_fp16.engine");
+        config.settings.output_dir = s["output_dir"].as<std::string>("scripts/training/datasets/game/");
+        config.settings.split = s["split"].as<std::string>("train");
+        config.settings.image_format = s["image_format"].as<std::string>(".jpg");
+        config.settings.confidence_threshold = s["confidence_threshold"].as<float>(0.45f);
+        config.settings.iou_threshold = s["iou_threshold"].as<float>(0.35f);
+    }
+    
+    return config;
+}
+
+inline bool AppConfig::save(const std::string& path) const {
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    
+    out << YAML::Key << "prompts" << YAML::Value << YAML::BeginSeq;
+    for (const auto& p : prompts) {
+        out << p;
+    }
+    out << YAML::EndSeq;
+    
+    out << YAML::Key << "settings" << YAML::Value << YAML::BeginMap;
+    out << YAML::Key << "sam3_engine_path" << YAML::Value << settings.sam3_engine_path;
+    out << YAML::Key << "output_dir" << YAML::Value << settings.output_dir;
+    out << YAML::Key << "split" << YAML::Value << settings.split;
+    out << YAML::Key << "image_format" << YAML::Value << settings.image_format;
+    out << YAML::Key << "confidence_threshold" << YAML::Value << settings.confidence_threshold;
+    out << YAML::Key << "iou_threshold" << YAML::Value << settings.iou_threshold;
+    out << YAML::EndMap;
+    
+    out << YAML::EndMap;
+    
+    std::ofstream fout(path);
+    fout << out.c_str();
+    return fout.good();
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/app/app_config.h
+git commit -m "feat(labeler): add YAML serialization for AppConfig"
+```
+
+---
+
+### Task 1.9: Create UI Renderer Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/ui_renderer.h`
+
+- [ ] **Step 1: Create ui_renderer.h**
+
+```cpp
+#pragma once
+
+#include "panels/capture_panel.h"
+#include "panels/labels_panel.h"
+#include "panels/settings_panel.h"
+#include "panels/log_console.h"
+#include "canvas/video_canvas.h"
+
+namespace sam3_labeler {
+
+class App;
+
+class UIRenderer {
+public:
+    UIRenderer(App& app);
+    
+    void render();
+    
+    // Panel state
+    bool capture_expanded_ = true;
+    bool labels_expanded_ = false;
+    bool settings_expanded_ = false;
+    bool log_expanded_ = true;
+    
+private:
+    void render_left_panel();
+    void render_toolbar();
+    void render_canvas();
+    void render_log_console();
+    
+    App& app_;
+    
+    // Panels
+    CapturePanel capture_panel_;
+    LabelsPanel labels_panel_;
+    SettingsPanel settings_panel_;
+    LogConsole log_console_;
+    VideoCanvas video_canvas_;
+    
+    // Layout constants from UI_DESIGN_SPEC.md
+    static constexpr int LEFT_PANEL_WIDTH = 256;
+    static constexpr int LOG_EXPANDED_HEIGHT = 192;
+    static constexpr int LOG_COLLAPSED_HEIGHT = 40;
+    static constexpr int TOOLBAR_HEIGHT = 48;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/ui_renderer.h
+git commit -m "feat(labeler): add UIRenderer header with layout constants"
+```
+
+---
+
+### Task 1.10: Create Panel Headers (Stubs)
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/capture_panel.h`
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/labels_panel.h`
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/settings_panel.h`
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/log_console.h`
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/video_canvas.h`
+
+- [ ] **Step 1: Create capture_panel.h**
+
+```cpp
+#pragma once
+
+namespace sam3_labeler {
+
+class App;
+
+class CapturePanel {
+public:
+    CapturePanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Create labels_panel.h**
+
+```cpp
+#pragma once
+
+namespace sam3_labeler {
+
+class App;
+
+class LabelsPanel {
+public:
+    LabelsPanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 3: Create settings_panel.h**
+
+```cpp
+#pragma once
+
+namespace sam3_labeler {
+
+class App;
+
+class SettingsPanel {
+public:
+    SettingsPanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 4: Create log_console.h**
+
+```cpp
+#pragma once
+
+#include <string>
+#include <deque>
+#include <chrono>
+
+namespace sam3_labeler {
+
+struct LogEntry {
+    std::string timestamp;
+    std::string level;
+    std::string message;
+};
+
+class LogConsole {
+public:
+    void render(bool expanded);
+    void add_entry(const std::string& level, const std::string& message);
+    
+private:
+    std::deque<LogEntry> entries_;
+    static constexpr size_t MAX_ENTRIES = 100;
+    
+    std::string format_timestamp();
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 5: Create video_canvas.h**
+
+```cpp
+#pragma once
+
+#include <opencv2/opencv.hpp>
+
+namespace sam3_labeler {
+
+class App;
+
+class VideoCanvas {
+public:
+    VideoCanvas(App& app) : app_(app) {}
+    void render();
+    
+    void set_frame(const cv::Mat& frame);
+    float zoom() const { return zoom_; }
+    void set_zoom(float z) { zoom_ = z; }
+    
+private:
+    App& app_;
+    cv::Mat current_frame_;
+    unsigned int texture_id_ = 0;
+    float zoom_ = 1.0f;
+    
+    void update_texture();
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 6: Commit all panel headers**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/
+git commit -m "feat(labeler): add UI panel stub headers"
+```
+
+---
+
+### Task 1.11: Build and Test
+
+- [ ] **Step 1: Build the labeler**
+
+```bash
+cd I:\CppProjects\sunone_aimbot_2
+cmake --build build/sam3 --config Release --target sam3_labeler
+```
+
+Expected: Build succeeds with no errors
+
+- [ ] **Step 2: Run the labeler**
+
+```bash
+.\build\sam3\Release\sam3_labeler.exe
+```
+
+Expected: Window opens with dark theme, shows "SAM3 Video Labeler" text
+
+- [ ] **Step 3: Commit if working**
+
+```bash
+git add -A
+git commit -m "feat(labeler): chunk 1 complete - basic app window with ImGui"
+```
+
+---
+
+## Chunk 2: SAM3 Integration
+
+### Task 2.1: Create SAM3 Labeler Backend Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/inference/sam3_labeler_backend.h`
+
+- [ ] **Step 1: Create sam3_labeler_backend.h**
+
+```cpp
+#pragma once
+
+#include <sam3.cuh>  // Existing SAM3 TRT interface
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
+#include <memory>
+
+namespace sam3_labeler {
+
+struct DetectedBox {
+    int class_id;
+    cv::Rect2f bbox;  // Normalized 0-1
+    float confidence;
+};
+
+class Sam3LabelerBackend {
+public:
+    Sam3LabelerBackend() = default;
+    ~Sam3LabelerBackend() = default;
+    
+    bool initialize(const std::string& engine_path);
+    std::vector<DetectedBox> infer(const cv::Mat& frame, const std::string& prompt);
+    
+    bool is_initialized() const { return initialized_; }
+    std::string last_error() const { return last_error_; }
+    
+private:
+    std::unique_ptr<SAM3_PCS> sam3_;
+    bool initialized_ = false;
+    std::string last_error_;
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/inference/sam3_labeler_backend.h
+git commit -m "feat(labeler): add Sam3LabelerBackend wrapper header"
+```
+
+---
+
+### Task 2.2: Create Multi-Prompt Runner Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/inference/multi_prompt_runner.h`
+
+- [ ] **Step 1: Create multi_prompt_runner.h**
+
+```cpp
+#pragma once
+
+#include "sam3_labeler_backend.h"
+#include "../app/app_config.h"
+#include <opencv2/opencv.hpp>
+#include <vector>
+#include <functional>
+
+namespace sam3_labeler {
+
+struct PredictionSet {
+    std::vector<DetectedBox> boxes;
+    int prompts_run = 0;
+    int prompts_skipped = 0;
+    std::string error;
+    bool success = false;
+};
+
+using ProgressCallback = std::function<void(int current, int total, const std::string& prompt)>;
+
+class MultiPromptRunner {
+public:
+    MultiPromptRunner() = default;
+    
+    bool initialize(const std::string& engine_path);
+    PredictionSet run(const cv::Mat& frame, 
+                      const std::vector<PromptConfig>& prompts);
+    
+    void set_progress_callback(ProgressCallback cb) { progress_cb_ = cb; }
+    
+    bool is_initialized() const { return backend_.is_initialized(); }
+    std::string last_error() const { return last_error_; }
+    
+private:
+    Sam3LabelerBackend backend_;
+    ProgressCallback progress_cb_;
+    std::string last_error_;
+    
+    // Merge overlapping boxes from different prompts (optional)
+    std::vector<DetectedBox> merge_boxes(const std::vector<DetectedBox>& boxes);
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Implement multi_prompt_runner.h**
+
+Add implementation after the class definition:
+
+```cpp
+// Implementation
+
+inline bool MultiPromptRunner::initialize(const std::string& engine_path) {
+    if (!backend_.initialize(engine_path)) {
+        last_error_ = backend_.last_error();
+        return false;
+    }
+    return true;
+}
+
+inline PredictionSet MultiPromptRunner::run(
+    const cv::Mat& frame,
+    const std::vector<PromptConfig>& prompts) {
+    
+    PredictionSet result;
+    
+    if (!backend_.is_initialized()) {
+        result.error = "Backend not initialized";
+        return result;
+    }
+    
+    std::vector<DetectedBox> all_boxes;
+    int prompt_idx = 0;
+    
+    for (const auto& prompt : prompts) {
+        if (!prompt.enabled) {
+            result.prompts_skipped++;
+            prompt_idx++;
+            continue;
+        }
+        
+        if (progress_cb_) {
+            progress_cb_(prompt_idx, static_cast<int>(prompts.size()), prompt.text);
+        }
+        
+        auto boxes = backend_.infer(frame, prompt.text);
+        
+        // Assign class_id from prompt config
+        for (auto& box : boxes) {
+            box.class_id = prompt.class_id;
+        }
+        
+        all_boxes.insert(all_boxes.end(), boxes.begin(), boxes.end());
+        result.prompts_run++;
+        prompt_idx++;
+    }
+    
+    // Optional: merge overlapping boxes
+    result.boxes = merge_boxes(all_boxes);
+    result.success = true;
+    
+    return result;
+}
+
+inline std::vector<DetectedBox> MultiPromptRunner::merge_boxes(
+    const std::vector<DetectedBox>& boxes) {
+    // For now, just return all boxes
+    // TODO: Implement NMS if needed
+    return boxes;
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/inference/multi_prompt_runner.h
+git commit -m "feat(labeler): add MultiPromptRunner for sequential inference"
+```
+
+---
+
+### Task 2.3: Create Box Editor Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/box_editor.h`
+
+- [ ] **Step 1: Create box_editor.h**
+
+```cpp
+#pragma once
+
+#include "../inference/sam3_labeler_backend.h"
+#include <opencv2/opencv.hpp>
+#include <imgui.h>
+#include <vector>
+#include <deque>
+
+namespace sam3_labeler {
+
+enum class EditorState {
+    None,
+    Hover,
+    Selected,
+    Moving,
+    Resizing,
+    Creating
+};
+
+struct EditableBox {
+    int class_id = 0;
+    cv::Rect2f rect;  // Pixel coordinates
+    float confidence = 1.0f;
+};
+
+class BoxEditor {
+public:
+    BoxEditor() = default;
+    
+    // Render boxes on canvas
+    void render(ImDrawList* draw_list, const ImVec2& canvas_pos, 
+                const ImVec2& canvas_size, float zoom, int img_width, int img_height);
+    
+    // Input handling
+    bool handle_mouse(const ImVec2& mouse_pos, bool clicked, bool dragging, 
+                      const ImVec2& canvas_pos, float zoom);
+    bool handle_keyboard(int key);
+    
+    // Data access
+    std::vector<DetectedBox> get_boxes_normalized(int img_width, int img_height) const;
+    void set_boxes_from_normalized(const std::vector<DetectedBox>& boxes, 
+                                    int img_width, int img_height);
+    void clear();
+    bool empty() const { return boxes_.empty(); }
+    size_t count() const { return boxes_.size(); }
+    
+    // Selection
+    int selected_index() const { return selected_idx_; }
+    void delete_selected();
+    
+    // State
+    EditorState state() const { return state_; }
+    
+    // Undo/redo
+    bool can_undo() const { return !undo_stack_.empty(); }
+    bool can_redo() const { return !redo_stack_.empty(); }
+    void undo();
+    void redo();
+    
+    // Class for new boxes
+    void set_active_class(int class_id) { active_class_ = class_id; }
+    int active_class() const { return active_class_; }
+    
+    // Class colors (matches game.yaml)
+    static ImU32 get_class_color(int class_id);
+    
+private:
+    std::vector<EditableBox> boxes_;
+    int selected_idx_ = -1;
+    EditorState state_ = EditorState::None;
+    int active_class_ = 0;
+    
+    // For resize/move
+    int resize_handle_ = -1;  // 0-3: corners, 4-7: edges
+    cv::Rect2f drag_start_rect_;
+    ImVec2 drag_start_pos_;
+    
+    // Undo/redo stacks
+    std::deque<std::vector<EditableBox>> undo_stack_;
+    std::deque<std::vector<EditableBox>> redo_stack_;
+    static constexpr size_t MAX_HISTORY = 50;
+    
+    void push_undo();
+    int hit_test(const ImVec2& pos, const cv::Rect2f& rect, float zoom);
+    int hit_test_handle(const ImVec2& pos, const cv::Rect2f& rect, float zoom);
+    cv::Rect2f pixel_to_canvas(const cv::Rect2f& rect, const ImVec2& canvas_pos, float zoom);
+    ImVec2 canvas_to_pixel(const ImVec2& pos, const ImVec2& canvas_pos, float zoom);
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/canvas/box_editor.h
+git commit -m "feat(labeler): add BoxEditor header with selection/undo support"
+```
+
+---
+
+## Chunk 3: YOLO Export
+
+### Task 3.1: Create YOLO Exporter Header
+
+**Files:**
+- Create: `SAM3TensorRT/cpp/apps/sam3_labeler/export/yolo_exporter.h`
+
+- [ ] **Step 1: Create yolo_exporter.h**
+
+```cpp
+#pragma once
+
+#include "../inference/sam3_labeler_backend.h"
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <vector>
+
+namespace sam3_labeler {
+
+enum class DatasetSplit { Train, Val };
+
+class YOLOExporter {
+public:
+    bool export_frame(
+        const cv::Mat& frame,
+        const std::vector<DetectedBox>& boxes,
+        const std::string& output_dir,
+        DatasetSplit split,
+        const std::string& filename_base
+    );
+    
+    std::string last_error() const { return last_error_; }
+    
+    static bool file_exists(const std::string& path);
+    static std::string generate_filename(int counter);
+    
+private:
+    std::string last_error_;
+    
+    std::string get_image_path(const std::string& output_dir, DatasetSplit split, 
+                                const std::string& filename, const std::string& ext);
+    std::string get_label_path(const std::string& output_dir, DatasetSplit split,
+                                const std::string& filename);
+    bool ensure_directory_exists(const std::string& path);
+};
+
+// Implementation
+
+inline bool YOLOExporter::export_frame(
+    const cv::Mat& frame,
+    const std::vector<DetectedBox>& boxes,
+    const std::string& output_dir,
+    DatasetSplit split,
+    const std::string& filename_base) {
+    
+    // Determine paths based on split
+    std::string img_ext = ".jpg";  // TODO: get from config
+    std::string img_path = get_image_path(output_dir, split, filename_base, img_ext);
+    std::string label_path = get_label_path(output_dir, split, filename_base);
+    
+    // Ensure directories exist
+    if (!ensure_directory_exists(img_path) || !ensure_directory_exists(label_path)) {
+        last_error_ = "Failed to create output directories";
+        return false;
+    }
+    
+    // Check for existing file
+    if (file_exists(img_path)) {
+        // TODO: Prompt user for overwrite confirmation
+        // For now, just overwrite
+    }
+    
+    // Write image
+    if (!cv::imwrite(img_path, frame)) {
+        last_error_ = "Failed to write image: " + img_path;
+        return false;
+    }
+    
+    // Write label file
+    std::ofstream fout(label_path);
+    if (!fout.is_open()) {
+        last_error_ = "Failed to open label file: " + label_path;
+        return false;
+    }
+    
+    for (const auto& box : boxes) {
+        // YOLO format: class_id x_center y_center width height
+        fout << box.class_id << " "
+             << box.bbox.x << " "
+             << box.bbox.y << " "
+             << box.bbox.width << " "
+             << box.bbox.height << "\n";
+    }
+    
+    fout.close();
+    return true;
+}
+
+inline std::string YOLOExporter::get_image_path(
+    const std::string& output_dir, DatasetSplit split,
+    const std::string& filename, const std::string& ext) {
+    
+    if (split == DatasetSplit::Train) {
+        return output_dir + "/images/" + filename + ext;
+    } else {
+        return output_dir + "/val/images/" + filename + ext;
+    }
+}
+
+inline std::string YOLOExporter::get_label_path(
+    const std::string& output_dir, DatasetSplit split,
+    const std::string& filename) {
+    
+    if (split == DatasetSplit::Train) {
+        return output_dir + "/labels/" + filename + ".txt";
+    } else {
+        return output_dir + "/val/labels/" + filename + ".txt";
+    }
+}
+
+inline bool YOLOExporter::ensure_directory_exists(const std::string& filepath) {
+    // Extract directory from filepath
+    size_t last_slash = filepath.find_last_of("/\\");
+    if (last_slash == std::string::npos) return true;
+    
+    std::string dir = filepath.substr(0, last_slash);
+    
+    // Create directory if needed (platform-specific)
+#ifdef _WIN32
+    return _mkdir(dir.c_str()) == 0 || errno == EEXIST;
+#else
+    return mkdir(dir.c_str(), 0755) == 0 || errno == EEXIST;
+#endif
+}
+
+inline bool YOLOExporter::file_exists(const std::string& path) {
+    std::ifstream f(path);
+    return f.good();
+}
+
+inline std::string YOLOExporter::generate_filename(int counter) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "labeler_%06d", counter);
+    return std::string(buf);
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/export/yolo_exporter.h
+git commit -m "feat(labeler): add YOLOExporter with train/val split support"
+```
+
+---
+
+## Chunk 4: Panel Implementations
+
+### Task 4.1: Implement Capture Panel
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/capture_panel.h`
+
+- [ ] **Step 1: Implement capture panel render**
+
+Replace stub with implementation:
+
+```cpp
+#pragma once
+
+#include <imgui.h>
+#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <commdlg.h>
+#endif
+
+namespace sam3_labeler {
+
+class App;
+
+class CapturePanel {
+public:
+    CapturePanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+    
+    void render_video_controls();
+    void render_file_browser();
+    std::string open_file_dialog();
+};
+
+inline void CapturePanel::render() {
+    // Video file section
+    ImGui::Text("Video File");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 80);
+    if (ImGui::Button("Browse...")) {
+        std::string path = open_file_dialog();
+        if (!path.empty()) {
+            // Load video via app
+        }
+    }
+    
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    
+    // Video controls
+    render_video_controls();
+}
+
+inline void CapturePanel::render_video_controls() {
+    // Play/Pause button
+    if (ImGui::Button("Play")) {
+        // app_.video_player().play();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Pause")) {
+        // app_.video_player().pause();
+    }
+    
+    // Frame stepping
+    ImGui::SameLine();
+    if (ImGui::Button("<")) {
+        // app_.video_player().step_backward();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(">")) {
+        // app_.video_player().step_forward();
+    }
+    
+    ImGui::Spacing();
+    
+    // Frame counter
+    // ImGui::Text("Frame: %d / %d", app_.video_player().current_frame(), app_.video_player().total_frames());
+    
+    // Seek bar
+    // float progress = (float)current_frame / total_frames;
+    // ImGui::SliderFloat("##seek", &progress, 0.0f, 1.0f, "");
+    
+    ImGui::Spacing();
+    
+    // Speed selector
+    const char* speeds[] = { "0.5x", "1.0x", "2.0x" };
+    static int speed_idx = 1;
+    ImGui::SetNextItemWidth(80);
+    ImGui::Combo("Speed", &speed_idx, speeds, IM_ARRAYSIZE(speeds));
+}
+
+inline std::string CapturePanel::open_file_dialog() {
+#ifdef _WIN32
+    char filename[MAX_PATH] = "";
+    
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "Video Files\0*.mp4;*.avi;*.mkv\0All Files\0*.*\0";
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST;
+    
+    if (GetOpenFileNameA(&ofn)) {
+        return std::string(filename);
+    }
+#endif
+    return "";
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/capture_panel.h
+git commit -m "feat(labeler): implement CapturePanel with video controls"
+```
+
+---
+
+### Task 4.2: Implement Labels Panel
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/labels_panel.h`
+
+- [ ] **Step 1: Implement labels panel**
+
+```cpp
+#pragma once
+
+#include <imgui.h>
+#include <vector>
+
+namespace sam3_labeler {
+
+class App;
+struct PromptConfig;
+
+class LabelsPanel {
+public:
+    LabelsPanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+    
+    void render_prompt_list();
+    void render_prompt_editor();
+    
+    // Editor state
+    bool show_editor_ = false;
+    int editing_idx_ = -1;
+    char prompt_text_buf_[256] = "";
+    int selected_class_idx_ = 0;
+    bool editor_enabled_ = true;
+};
+
+inline void LabelsPanel::render() {
+    // Prompt list
+    render_prompt_list();
+    
+    ImGui::Spacing();
+    
+    // Add/Edit/Remove buttons
+    if (ImGui::Button("Add")) {
+        editing_idx_ = -1;
+        prompt_text_buf_[0] = '\0';
+        selected_class_idx_ = 0;
+        editor_enabled_ = true;
+        show_editor_ = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Edit")) {
+        // Open editor for selected prompt
+        show_editor_ = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Remove")) {
+        // Remove selected prompt
+    }
+    
+    // Prompt editor popup
+    if (show_editor_) {
+        render_prompt_editor();
+    }
+}
+
+inline void LabelsPanel::render_prompt_list() {
+    // ImGui::Text("Prompts");
+    // ImGui::Separator();
+    
+    // For each prompt in config:
+    // - Checkbox for enabled
+    // - Text: "prompt_text -> class_name"
+    // - Click to select
+    
+    // Placeholder
+    ImGui::Text("No prompts configured");
+    ImGui::Text("Click 'Add' to create a prompt");
+}
+
+inline void LabelsPanel::render_prompt_editor() {
+    ImGui::OpenPopup("Edit Prompt");
+    
+    if (ImGui::BeginPopupModal("Edit Prompt", &show_editor_)) {
+        ImGui::Text("Prompt Text:");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputText("##prompt", prompt_text_buf_, sizeof(prompt_text_buf_));
+        
+        ImGui::Spacing();
+        
+        ImGui::Text("Class:");
+        // Class dropdown from classes.txt
+        const char* classes[] = { "player", "bot", "weapon", "outline", 
+                                  "dead_body", "hideout_target_human", 
+                                  "hideout_target_balls", "head", 
+                                  "smoke", "fire", "third_person" };
+        ImGui::SetNextItemWidth(-1);
+        ImGui::Combo("##class", &selected_class_idx_, classes, IM_ARRAYSIZE(classes));
+        
+        ImGui::Spacing();
+        
+        ImGui::Checkbox("Enabled", &editor_enabled_);
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        if (ImGui::Button("OK", ImVec2(80, 0))) {
+            // Save prompt
+            show_editor_ = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+            show_editor_ = false;
+        }
+        
+        ImGui::EndPopup();
+    }
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/labels_panel.h
+git commit -m "feat(labeler): implement LabelsPanel with prompt editor"
+```
+
+---
+
+### Task 4.3: Implement Settings Panel
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/settings_panel.h`
+
+- [ ] **Step 1: Implement settings panel**
+
+```cpp
+#pragma once
+
+#include <imgui.h>
+
+namespace sam3_labeler {
+
+class App;
+
+class SettingsPanel {
+public:
+    SettingsPanel(App& app) : app_(app) {}
+    void render();
+    
+private:
+    App& app_;
+    
+    char output_dir_buf_[512] = "";
+};
+
+inline void SettingsPanel::render() {
+    // Output directory
+    ImGui::Text("Output Directory:");
+    ImGui::SetNextItemWidth(-80);
+    ImGui::InputText("##output", output_dir_buf_, sizeof(output_dir_buf_));
+    ImGui::SameLine();
+    if (ImGui::Button("...##output_browse")) {
+        // Open folder browser
+    }
+    
+    ImGui::Spacing();
+    
+    // Dataset split
+    ImGui::Text("Dataset Split:");
+    const char* splits[] = { "train", "val" };
+    static int split_idx = 0;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##split", &split_idx, splits, IM_ARRAYSIZE(splits));
+    
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    
+    // Confidence threshold
+    static float confidence = 0.45f;
+    ImGui::Text("Confidence: %.2f", confidence);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##confidence", &confidence, 0.1f, 0.99f, "");
+    
+    // IoU threshold
+    static float iou = 0.35f;
+    ImGui::Text("IoU Threshold: %.2f", iou);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##iou", &iou, 0.1f, 0.95f, "");
+    
+    ImGui::Spacing();
+    
+    // Image format
+    ImGui::Text("Image Format:");
+    const char* formats[] = { ".jpg", ".png" };
+    static int format_idx = 0;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##format", &format_idx, formats, IM_ARRAYSIZE(formats));
+}
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/settings_panel.h
+git commit -m "feat(labeler): implement SettingsPanel with threshold sliders"
+```
+
+---
+
+### Task 4.4: Implement Log Console
+
+**Files:**
+- Modify: `SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/log_console.h`
+
+- [ ] **Step 1: Implement log console**
+
+```cpp
+#pragma once
+
+#include <imgui.h>
+#include <string>
+#include <deque>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
+namespace sam3_labeler {
+
+struct LogEntry {
+    std::string timestamp;
+    std::string level;
+    std::string message;
+};
+
+class LogConsole {
+public:
+    void render(bool expanded) {
+        // Header
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.094f, 0.094f, 0.106f, 1.0f));
+        
+        float height = expanded ? 192.0f : 40.0f;
+        ImGui::BeginChild("LogConsole", ImVec2(0, height), true);
+        
+        // Header row
+        ImGui::Text("Log Console");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%zu entries)", entries_.size());
+        
+        ImGui::SameLine(ImGui::GetWindowWidth() - 50);
+        const char* btn_text = expanded ? "v" : "^";
+        if (ImGui::Button(btn_text, ImVec2(24, 0))) {
+            // Toggle expanded (handled by parent)
+        }
+        
+        if (expanded) {
+            ImGui::Separator();
+            
+            // Log entries
+            ImGui::BeginChild("LogEntries", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+            
+            for (const auto& entry : entries_) {
+                // Timestamp
+                ImGui::TextColored(ImVec4(0.322f, 0.322f, 0.361f, 1.0f), "[%s]", entry.timestamp.c_str());
+                ImGui::SameLine();
+                
+                // Level with color
+                ImVec4 level_color;
+                if (entry.level == "INFO") {
+                    level_color = ImVec4(0.318f, 0.635f, 1.0f, 1.0f);  // Blue
+                } else if (entry.level == "SUCCESS") {
+                    level_color = ImVec4(0.02f, 0.875f, 0.447f, 1.0f);  // Green
+                } else if (entry.level == "WARNING") {
+                    level_color = ImVec4(0.992f, 0.780f, 0.0f, 1.0f);  // Yellow
+                } else if (entry.level == "ERROR") {
+                    level_color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // Red
+                } else {
+                    level_color = ImVec4(0.831f, 0.831f, 0.847f, 1.0f);
+                }
+                
+                ImGui::TextColored(level_color, "%s", entry.level.c_str());
+                ImGui::SameLine();
+                
+                // Message
+                ImGui::Text("%s", entry.message.c_str());
+            }
+            
+            // Auto-scroll to bottom
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+            
+            ImGui::EndChild();
+        }
+        
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+    
+    void add_entry(const std::string& level, const std::string& message) {
+        LogEntry entry;
+        entry.timestamp = format_timestamp();
+        entry.level = level;
+        entry.message = message;
+        
+        entries_.push_back(entry);
+        
+        // Keep only last MAX_ENTRIES
+        while (entries_.size() > MAX_ENTRIES) {
+            entries_.pop_front();
+        }
+    }
+    
+private:
+    std::deque<LogEntry> entries_;
+    static constexpr size_t MAX_ENTRIES = 100;
+    
+    std::string format_timestamp() {
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&time), "%H:%M:%S");
+        return ss.str();
+    }
+};
+
+}  // namespace sam3_labeler
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add SAM3TensorRT/cpp/apps/sam3_labeler/ui/panels/log_console.h
+git commit -m "feat(labeler): implement LogConsole with colored levels"
+```
+
+---
+
+## Summary
+
+This plan covers the full implementation of the SAM3 Video Labeler across 4 chunks:
+
+1. **Chunk 1**: Project setup, CMake, App class, ImGui init, dark theme
+2. **Chunk 2**: SAM3 integration, MultiPromptRunner, BoxEditor
+3. **Chunk 3**: YOLOExporter
+4. **Chunk 4**: UI panel implementations
+
+Each task has exact file paths, complete code, and commit commands. Follow the tasks in order, committing after each completed step.
+
+**Execution**: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan.
